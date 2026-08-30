@@ -90,7 +90,9 @@ const UNKNOWN_EMAIL_DUMMY_HASH = 'b'.repeat(64);
 // else (no R2 bucket needed — one less thing to configure). Kept small on
 // purpose: KV values top out at 25MB and base64 adds ~33% overhead, but the
 // real reason for the cap is fast page loads for members on the go.
-const MAX_PHOTO_BYTES = 1.5 * 1024 * 1024; // 1.5MB
+const MAX_PHOTO_BYTES = 1.5 * 1024 * 1024; // 1.5MB — the size a photo must fit once stored
+const MAX_PHOTO_UPLOAD_BYTES = 8 * 1024 * 1024; // hard ceiling on the RAW file a member selects, before any resizing is attempted
+const MAX_PHOTO_DIMENSION = 1600; // longest edge, in pixels, once resized
 const ALLOWED_PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
 function esc(str) {
@@ -181,6 +183,96 @@ function matchesDeclaredImageType(bytes, declaredType) {
     return riff && webp;
   }
   return false;
+}
+
+// Shrinks an oversized photo down to fit MAX_PHOTO_BYTES instead of just
+// rejecting it, using @cf-wasm/photon — a WASM image library built to run
+// inside Cloudflare Workers directly (no R2 bucket or Cloudflare Images
+// product needed, same reasoning as storing photos in KV above). Always
+// re-encodes as JPEG, which keeps the output predictable and small
+// regardless of the original format.
+//
+// Loaded with a dynamic import rather than a static one, and every failure
+// path returns `skip: true` rather than throwing, so that if this library
+// is ever unavailable or a particular file can't be processed for any
+// reason, only the upload itself falls back to the old "please use a
+// smaller photo" behavior — the rest of the site is never affected.
+async function resizePhotoToFit(bytes) {
+  let photon;
+  try {
+    photon = await import('@cf-wasm/photon');
+  } catch (err) {
+    return { skip: true };
+  }
+  const { PhotonImage, resize, SamplingFilter } = photon;
+
+  let input;
+  try {
+    input = PhotonImage.new_from_byteslice(bytes);
+  } catch (err) {
+    return { error: "That file doesn't look like a valid image." };
+  }
+
+  const toFree = [input];
+  try {
+    let width = input.get_width();
+    let height = input.get_height();
+    let working = input;
+
+    const longestEdge = Math.max(width, height);
+    if (longestEdge > MAX_PHOTO_DIMENSION) {
+      const scale = MAX_PHOTO_DIMENSION / longestEdge;
+      const targetWidth = Math.max(1, Math.round(width * scale));
+      const targetHeight = Math.max(1, Math.round(height * scale));
+      working = resize(input, targetWidth, targetHeight, SamplingFilter.Lanczos3);
+      toFree.push(working);
+      width = targetWidth;
+      height = targetHeight;
+    }
+
+    // Step quality down first; if a very high-detail photo still won't fit
+    // even at low quality, shrink the dimensions further as a last resort.
+    let quality = 85;
+    let outBytes = working.get_bytes_jpeg(quality);
+    while (outBytes.length > MAX_PHOTO_BYTES && quality > 30) {
+      quality -= 15;
+      outBytes = working.get_bytes_jpeg(quality);
+    }
+    if (outBytes.length > MAX_PHOTO_BYTES) {
+      const smaller = resize(working, Math.max(1, Math.round(width * 0.6)), Math.max(1, Math.round(height * 0.6)), SamplingFilter.Lanczos3);
+      toFree.push(smaller);
+      outBytes = smaller.get_bytes_jpeg(70);
+    }
+    if (outBytes.length > MAX_PHOTO_BYTES) {
+      return { error: "That photo couldn't be resized to fit — please try a different image." };
+    }
+
+    return { bytes: outBytes, contentType: 'image/jpeg' };
+  } catch (err) {
+    return { error: "That file doesn't look like a valid image." };
+  } finally {
+    for (const img of toFree) {
+      try { img.free(); } catch (err) { /* already freed or never fully created — fine to ignore */ }
+    }
+  }
+}
+
+// Runs a freshly-validated upload through resizePhotoToFit only when it's
+// actually needed (already fits? leave it exactly as before). Returns
+// either { bytes, contentType } to save, or { errorMessage } to show the
+// member instead.
+async function prepareUploadedPhoto(bytes, declaredType) {
+  if (bytes.length <= MAX_PHOTO_BYTES) {
+    return { bytes, contentType: declaredType };
+  }
+  const processed = await resizePhotoToFit(bytes);
+  if (processed.skip) {
+    return { errorMessage: 'That photo is too large — please use one under 1.5MB.' };
+  }
+  if (processed.error) {
+    return { errorMessage: processed.error };
+  }
+  return { bytes: processed.bytes, contentType: processed.contentType };
 }
 
 // Passwords are hashed with PBKDF2-SHA256 via the platform's native Web
@@ -1295,15 +1387,19 @@ export default {
       if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
         return await renderWith('Photos must be JPEG, PNG, or WEBP.', '');
       }
-      if (file.size > MAX_PHOTO_BYTES) {
-        return await renderWith('That photo is too large — please use one under 1.5MB.', '');
+      if (file.size > MAX_PHOTO_UPLOAD_BYTES) {
+        return await renderWith('That photo is too large to upload — please use a file under 8MB.', '');
       }
       const bytes = new Uint8Array(await file.arrayBuffer());
       if (!matchesDeclaredImageType(bytes, file.type)) {
         return await renderWith("That file doesn't look like a valid image.", '');
       }
+      const prepared = await prepareUploadedPhoto(bytes, file.type);
+      if (prepared.errorMessage) {
+        return await renderWith(prepared.errorMessage, '');
+      }
       const id = crypto.randomUUID();
-      await saveGalleryPhotoBlob(env, id, file.type, bytesToBase64(bytes));
+      await saveGalleryPhotoBlob(env, id, prepared.contentType, bytesToBase64(prepared.bytes));
       const galleryItems = await getGalleryIndex(env);
       galleryItems.unshift({ id, uploaderName: currentUser.name, caption, createdAt: new Date().toISOString() });
       await saveGalleryIndex(env, galleryItems);
@@ -1351,14 +1447,18 @@ export default {
       if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
         return htmlResponse(changePasswordHTML(currentUser, { photoError: 'Photos must be JPEG, PNG, or WEBP.' }), 400);
       }
-      if (file.size > MAX_PHOTO_BYTES) {
-        return htmlResponse(changePasswordHTML(currentUser, { photoError: 'That photo is too large — please use one under 1.5MB.' }), 400);
+      if (file.size > MAX_PHOTO_UPLOAD_BYTES) {
+        return htmlResponse(changePasswordHTML(currentUser, { photoError: 'That photo is too large to upload — please use a file under 8MB.' }), 400);
       }
       const bytes = new Uint8Array(await file.arrayBuffer());
       if (!matchesDeclaredImageType(bytes, file.type)) {
         return htmlResponse(changePasswordHTML(currentUser, { photoError: "That file doesn't look like a valid image." }), 400);
       }
-      await savePhoto(env, currentUser.id, file.type, bytesToBase64(bytes));
+      const prepared = await prepareUploadedPhoto(bytes, file.type);
+      if (prepared.errorMessage) {
+        return htmlResponse(changePasswordHTML(currentUser, { photoError: prepared.errorMessage }), 400);
+      }
+      await savePhoto(env, currentUser.id, prepared.contentType, bytesToBase64(prepared.bytes));
       currentUser.hasPhoto = true;
       currentUser.photoUpdatedAt = Date.now();
       await saveUser(env, currentUser);
