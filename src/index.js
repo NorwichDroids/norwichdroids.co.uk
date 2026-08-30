@@ -16,10 +16,13 @@ const SEED_EVENTS = [
   {
     id: 'charity', day: '05', daySmall: false, month: 'SEP',
     title: 'Feel The Force Day — Team Meet Point', location: 'Peterborough Cathedral, Peterborough',
+    startTime: '[Start time TBC]',
+    accessTime: '[Access time TBC]',
     parking: 'Free public parking at the Cathedral precinct — arrive early, fills up fast.',
     floorArea: '[Pitch size TBC] — outdoor display pitch in the precinct.',
     accommodation: 'Not provided — day event, home travel expected.',
     fuel: 'Not covered — please claim mileage separately if needed.',
+    description: '',
     baseDroids: [
       { name: '[Member Name]', droid: 'R2 Unit' },
       { name: '[Member Name]', droid: 'BB-8' },
@@ -29,10 +32,13 @@ const SEED_EVENTS = [
   {
     id: 'conv', day: '26–27', daySmall: true, month: 'SEP',
     title: 'Nor-Con — Team Meet Point', location: 'Norfolk Showground Arena, Norfolk',
+    startTime: '[Start time TBC]',
+    accessTime: '[Access time TBC]',
     parking: 'Free exhibitor parking on-site at the Showground.',
     floorArea: '[Pitch size TBC] — indoor arena pitch, confirm with organisers.',
     accommodation: 'Not required — local event.',
     fuel: 'Not covered — local event.',
+    description: '',
     baseDroids: [
       { name: '[Member Name]', droid: 'R2 Unit' },
       { name: '[Member Name]', droid: 'R2 Unit' },
@@ -42,10 +48,13 @@ const SEED_EVENTS = [
   {
     id: 'mildcon', day: '03', daySmall: false, month: 'OCT',
     title: 'Mil-D-Con — Team Meet Point', location: 'RAF Mildenhall, Suffolk',
+    startTime: '[Start time TBC]',
+    accessTime: '[Access time TBC]',
     parking: 'On-base parking — security pass required in advance, [details TBC].',
     floorArea: '[Pitch size TBC] — indoor hangar display.',
     accommodation: 'Provided — on-base lodging for exhibitors, confirm numbers with the committee.',
     fuel: 'Covered — mileage reimbursed for this event.',
+    description: '',
     baseDroids: [
       { name: '[Member Name]', droid: 'BB-8' },
       { name: '[Member Name]', droid: 'R2 Unit' },
@@ -471,6 +480,23 @@ async function saveBuildLogs(env, logs) {
   await env.DATA.put('buildlogs', JSON.stringify(logs));
 }
 
+// A build log post's optional photo lives under its own key, same
+// index-plus-blob split as gallery photos — but these stay members-only
+// (served through a session-gated route below), same as profile photos.
+async function saveBuildLogPhoto(env, logId, contentType, base64Data) {
+  await env.DATA.put(`buildlogphoto:${logId}`, JSON.stringify({ contentType, data: base64Data }));
+}
+
+async function getBuildLogPhoto(env, logId) {
+  const raw = await env.DATA.get(`buildlogphoto:${logId}`);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+async function deleteBuildLogPhoto(env, logId) {
+  await env.DATA.delete(`buildlogphoto:${logId}`);
+}
+
 // Session values carry the user's sessionVersion at login time, so that
 // changing a password (which bumps sessionVersion) immediately invalidates
 // every other session for that account — not just the current one.
@@ -627,11 +653,19 @@ function eventsTabHTML(events, rsvps, addedDroids, openEventId) {
 
           <div class="event-details">
             <div class="detail-grid">
+              <div><div class="label">Start Time</div><div class="value">${esc(ev.startTime || 'TBC')}</div></div>
+              <div><div class="label">Access Time</div><div class="value">${esc(ev.accessTime || 'TBC')}</div></div>
               <div><div class="label">Parking</div><div class="value">${esc(ev.parking)}</div></div>
               <div><div class="label">Floor Area</div><div class="value">${esc(ev.floorArea)}</div></div>
               <div><div class="label">Accommodation</div><div class="value">${esc(ev.accommodation)}</div></div>
               <div><div class="label">Fuel</div><div class="value">${esc(ev.fuel)}</div></div>
             </div>
+
+            ${ev.description ? `
+            <div class="event-description">
+              <div class="droid-list-label">Description &amp; Other Info</div>
+              <p>${esc(ev.description)}</p>
+            </div>` : ''}
 
             <div class="droid-list-label">Droids Attending</div>
             <div class="droid-list">
@@ -675,12 +709,12 @@ function directoryTabHTML(users) {
       </div>`).join('')}</div>`;
 }
 
-function logsTabHTML(buildLogs, currentUser) {
+function logsTabHTML(buildLogs, currentUser, error, notice) {
   const posts = buildLogs.length === 0
     ? `<p class="sub">No build log posts yet — be the first to share progress with the form on the right.</p>`
     : `<div class="buildlog-grid">${buildLogs.map((p) => `
       <div class="buildlog-card">
-        <div class="thumb">PHOTO</div>
+        <div class="thumb">${p.hasPhoto ? `<img src="/members/buildlog-photo/${esc(p.id)}?v=${esc(p.photoUpdatedAt || 0)}" alt="${esc(p.caption)}">` : 'PHOTO'}</div>
         <div class="body">
           <div class="who">${esc(p.author)} &middot; ${esc(p.droid)}</div>
           <div class="caption">${esc(p.caption)}</div>
@@ -693,7 +727,9 @@ function logsTabHTML(buildLogs, currentUser) {
       <aside class="split-sidebar">
         <div class="login-card" style="max-width:none; margin:0;">
           <h1 style="font-size:16px; text-align:left;">Share a Build Update</h1>
-          <form method="post" action="/members/add-buildlog?tab=logs">
+          ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
+          ${notice ? `<div class="admin-success">${esc(notice)}</div>` : ''}
+          <form method="post" action="/members/add-buildlog?tab=logs" enctype="multipart/form-data">
             <div class="field">
               <label for="log_droid">Droid</label>
               <select id="log_droid" name="droid" required>
@@ -704,9 +740,13 @@ function logsTabHTML(buildLogs, currentUser) {
               <label for="log_caption">What's new?</label>
               <textarea id="log_caption" name="caption" rows="3" required placeholder="e.g. Dome motor finally spins smoothly..."></textarea>
             </div>
+            <div class="field">
+              <label for="log_photo">Photo (optional)</label>
+              <input type="file" id="log_photo" name="photo" accept="image/jpeg,image/png,image/webp">
+            </div>
             <button type="submit" class="btn btn-primary">Post Update</button>
           </form>
-          <p style="font-size:12px; color:var(--muted); margin:12px 0 0;">Posts as ${esc(currentUser.name)}. An admin can edit or remove posts from Admin &gt; Build Logs.</p>
+          <p style="font-size:12px; color:var(--muted); margin:12px 0 0;">Posts as ${esc(currentUser.name)}. Photos are only ever shown here in the Members Area, never on the public site. An admin can edit or remove posts from Admin &gt; Build Logs.</p>
         </div>
       </aside>
     </div>`;
@@ -763,11 +803,11 @@ function dashNav(active, currentUser) {
 </div>`;
 }
 
-function dashboardHTML({ tab, openEventId, events, rsvps, addedDroids, users, buildLogs, galleryItems, galleryError, galleryNotice, currentUser }) {
+function dashboardHTML({ tab, openEventId, events, rsvps, addedDroids, users, buildLogs, logError, logNotice, galleryItems, galleryError, galleryNotice, currentUser }) {
   const content = tab === 'events' ? eventsTabHTML(events, rsvps, addedDroids, openEventId)
     : tab === 'directory' ? directoryTabHTML(users)
     : tab === 'gallery' ? galleryTabHTML(galleryItems, currentUser, galleryError, galleryNotice)
-    : logsTabHTML(buildLogs, currentUser);
+    : logsTabHTML(buildLogs, currentUser, logError, logNotice);
 
   return `<!doctype html>
 <html lang="en"><head>${HEAD}<title>Members Dashboard — Norwich Droids</title></head>
@@ -943,7 +983,7 @@ document.querySelectorAll('form[action="/members/admin/delete"]').forEach((f) =>
 function eventFormFields(ev) {
   const e = ev || {
     id: '', day: '', daySmall: false, month: '', title: '', location: '',
-    parking: '', floorArea: '', accommodation: '', fuel: '', baseDroids: [],
+    startTime: '', accessTime: '', parking: '', floorArea: '', accommodation: '', fuel: '', description: '', baseDroids: [],
   };
   return `
       <div class="field">
@@ -967,6 +1007,16 @@ function eventFormFields(ev) {
         <label for="ev_location">Location</label>
         <input type="text" id="ev_location" name="location" value="${esc(e.location)}" required>
       </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="ev_start_time">Start Time</label>
+          <input type="text" id="ev_start_time" name="start_time" value="${esc(e.startTime || '')}" placeholder="e.g. 10:00am">
+        </div>
+        <div class="field">
+          <label for="ev_access_time">Access Time</label>
+          <input type="text" id="ev_access_time" name="access_time" value="${esc(e.accessTime || '')}" placeholder="e.g. Exhibitors from 8:00am">
+        </div>
+      </div>
       <div class="field">
         <label for="ev_parking">Parking</label>
         <input type="text" id="ev_parking" name="parking" value="${esc(e.parking)}">
@@ -978,6 +1028,10 @@ function eventFormFields(ev) {
       <div class="field">
         <label for="ev_accom">Accommodation</label>
         <input type="text" id="ev_accom" name="accommodation" value="${esc(e.accommodation)}">
+      </div>
+      <div class="field">
+        <label for="ev_description">Description &amp; Other Info</label>
+        <textarea id="ev_description" name="description" rows="4" placeholder="Anything else members should know about this event.">${esc(e.description || '')}</textarea>
       </div>
       <div class="field">
         <label for="ev_fuel">Fuel</label>
@@ -1049,6 +1103,7 @@ document.querySelectorAll('form[action="/members/admin/events/delete"]').forEach
 function adminBuildLogsHTML({ currentUser, buildLogs, error, notice, editingLog }) {
   const rows = buildLogs.map((p) => `
     <tr>
+      <td>${p.hasPhoto ? `<div class="thumb" style="width:56px; height:56px; border-radius:4px;"><img src="/members/buildlog-photo/${esc(p.id)}?v=${esc(p.photoUpdatedAt || 0)}" alt=""></div>` : ''}</td>
       <td>${esc(p.author)}</td>
       <td>${esc(p.droid)}</td>
       <td style="white-space:normal; max-width:360px;">${esc(p.caption)}</td>
@@ -1099,8 +1154,8 @@ ${dashNav('admin', currentUser)}
 
   <div class="admin-table-wrap">
     <table class="admin-table">
-      <thead><tr><th>Author</th><th>Droid</th><th>Caption</th><th>Actions</th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="4">No build log posts yet.</td></tr>`}</tbody>
+      <thead><tr><th>Photo</th><th>Author</th><th>Droid</th><th>Caption</th><th>Actions</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="5">No build log posts yet.</td></tr>`}</tbody>
     </table>
   </div>
 </div>
@@ -1355,15 +1410,63 @@ export default {
     if (path === '/members/add-buildlog' && request.method === 'POST') {
       const currentUser = await getSessionUser(request, env);
       if (!currentUser) return redirect('/members/login');
+
+      const renderWith = async (logError, logNotice) => {
+        const buildLogs = await getBuildLogs(env);
+        return htmlResponse(dashboardHTML({
+          tab: 'logs', openEventId: '', events: [], rsvps: {}, addedDroids: {}, users: [],
+          buildLogs, logError, logNotice, galleryItems: [], currentUser,
+        }));
+      };
+
       const form = await request.formData();
       const droid = String(form.get('droid') || '').trim();
       const caption = String(form.get('caption') || '').trim();
-      if (droid !== '' && caption !== '') {
-        const buildLogs = await getBuildLogs(env);
-        buildLogs.push({ id: crypto.randomUUID(), author: currentUser.name, droid, caption });
-        await saveBuildLogs(env, buildLogs);
+      if (droid === '' || caption === '') {
+        return await renderWith('Please choose a droid and describe the update.', '');
       }
-      return redirect('/members/dashboard?tab=logs');
+
+      // The photo is optional — a plain text update with no file selected
+      // skips all of this and posts exactly as it always has.
+      const file = form.get('photo');
+      const hasFile = file && typeof file !== 'string' && file.size;
+      let photoToSave = null;
+      if (hasFile) {
+        if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
+          return await renderWith('Photos must be JPEG, PNG, or WEBP.', '');
+        }
+        if (file.size > MAX_PHOTO_UPLOAD_BYTES) {
+          return await renderWith('That photo is too large to upload — please use a file under 8MB.', '');
+        }
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        if (!matchesDeclaredImageType(bytes, file.type)) {
+          return await renderWith("That file doesn't look like a valid image.", '');
+        }
+        const prepared = await prepareUploadedPhoto(bytes, file.type);
+        if (prepared.errorMessage) {
+          return await renderWith(prepared.errorMessage, '');
+        }
+        photoToSave = prepared;
+      }
+
+      const id = crypto.randomUUID();
+      // Write the photo blob BEFORE the index entry that flags hasPhoto:true —
+      // same order as profile photos and gallery photos elsewhere in this file.
+      // If saving the blob ever fails partway through, the post simply isn't
+      // created at all yet, rather than being left with hasPhoto:true pointing
+      // at a blob that was never written.
+      if (photoToSave) {
+        await saveBuildLogPhoto(env, id, photoToSave.contentType, bytesToBase64(photoToSave.bytes));
+      }
+      const buildLogs = await getBuildLogs(env);
+      const newLog = { id, author: currentUser.name, droid, caption };
+      if (photoToSave) {
+        newLog.hasPhoto = true;
+        newLog.photoUpdatedAt = Date.now();
+      }
+      buildLogs.push(newLog);
+      await saveBuildLogs(env, buildLogs);
+      return await renderWith('', 'Update posted.');
     }
 
     if (path === '/members/gallery/upload' && request.method === 'POST') {
@@ -1495,6 +1598,27 @@ export default {
 
       const userId = path.slice('/members/photo/'.length);
       const photo = await getPhoto(env, userId);
+      if (!photo) return htmlResponse('Not found.', 404);
+      const bytes = base64ToBytes(photo.data);
+      return new Response(bytes, {
+        status: 200,
+        headers: {
+          'Content-Type': photo.contentType,
+          'Cache-Control': 'private, max-age=86400',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
+    }
+
+    if (path.startsWith('/members/buildlog-photo/') && request.method === 'GET') {
+      // Same reasoning as profile photos above — build log photos are only
+      // ever shown inside the members-only Build Logs tab, so this is
+      // session-gated too, not a public URL (unlike public gallery photos).
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      const logId = path.slice('/members/buildlog-photo/'.length);
+      const photo = await getBuildLogPhoto(env, logId);
       if (!photo) return htmlResponse('Not found.', 404);
       const bytes = base64ToBytes(photo.data);
       return new Response(bytes, {
@@ -1661,10 +1785,13 @@ export default {
         const newEvent = {
           id: uniqueEventId(events, slugify(title)),
           day, daySmall: form.get('day_small') === 'on', month, title, location,
+          startTime: String(form.get('start_time') || '').trim(),
+          accessTime: String(form.get('access_time') || '').trim(),
           parking: String(form.get('parking') || '').trim(),
           floorArea: String(form.get('floor_area') || '').trim(),
           accommodation: String(form.get('accommodation') || '').trim(),
           fuel: String(form.get('fuel') || '').trim(),
+          description: String(form.get('description') || '').trim(),
           baseDroids: parseBaseDroids(form.get('base_droids')),
         };
         events.push(newEvent);
@@ -1690,10 +1817,13 @@ export default {
         events[idx] = {
           ...events[idx],
           day, daySmall: form.get('day_small') === 'on', month, title, location,
+          startTime: String(form.get('start_time') || '').trim(),
+          accessTime: String(form.get('access_time') || '').trim(),
           parking: String(form.get('parking') || '').trim(),
           floorArea: String(form.get('floor_area') || '').trim(),
           accommodation: String(form.get('accommodation') || '').trim(),
           fuel: String(form.get('fuel') || '').trim(),
+          description: String(form.get('description') || '').trim(),
           baseDroids: parseBaseDroids(form.get('base_droids')),
         };
         await saveEvents(env, events);
@@ -1756,6 +1886,9 @@ export default {
         }
         const remaining = buildLogs.filter((p) => p.id !== logId);
         await saveBuildLogs(env, remaining);
+        if (target.hasPhoto) {
+          await deleteBuildLogPhoto(env, logId);
+        }
         return htmlResponse(adminBuildLogsHTML({ currentUser, buildLogs: remaining, error: '', notice: 'Post deleted.', editingLog: null }));
       }
 
