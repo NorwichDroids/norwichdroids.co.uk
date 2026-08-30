@@ -1114,7 +1114,7 @@ ${dashNav('change-password', currentUser)}
         </form>` : ''}
       </div>
     </div>
-    <p style="font-size:12.5px; color:var(--muted); margin:14px 0 0;">JPEG, PNG or WEBP, up to 1.5MB. Visible to other logged-in members in the Directory.</p>
+    <p style="font-size:12.5px; color:var(--muted); margin:14px 0 0;">JPEG, PNG or WEBP, up to 1.5MB. Shown to other logged-in members in the Directory, and on the PUBLIC About page's "Meet the Members" section alongside your name.</p>
   </div>
 
   <div class="login-card" style="max-width:420px; margin:0 0 28px;">
@@ -1624,11 +1624,16 @@ export default {
     const path = url.pathname;
 
     // --- Public API — no login required. Only ever returns fields a member
-    // has chosen to make public (name/nickname/droid/bio, or a gallery photo they
-    // uploaded) — never email, password data, or anything else account-related.
+    // has chosen to make public (name/nickname/droid/bio/profile photo, or a
+    // gallery photo they uploaded) — never email, password data, or anything
+    // else account-related. `id` here is only ever used to fetch the public
+    // photo route below; it's an opaque id, not otherwise sensitive.
     if (path === '/api/members' && request.method === 'GET') {
       const users = await listUsers(env);
-      const publicMembers = users.map((u) => ({ name: u.name, nickname: u.nickname || '', droid: u.droid || '', bio: u.bio || '' }));
+      const publicMembers = users.map((u) => ({
+        id: u.id, name: u.name, nickname: u.nickname || '', droid: u.droid || '', bio: u.bio || '',
+        hasPhoto: !!u.hasPhoto, photoUpdatedAt: u.photoUpdatedAt || 0,
+      }));
       return new Response(JSON.stringify(publicMembers), {
         status: 200,
         headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
@@ -1707,6 +1712,28 @@ export default {
         headers: {
           'Content-Type': photo.contentType,
           // Same short-cache reasoning as the gallery photo route above.
+          'Cache-Control': 'public, max-age=300',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
+    }
+
+    // Public, no login required — powers the public About page's "Meet the
+    // Members" photos. This is deliberately a SEPARATE route from
+    // /members/photo/<id> below (which stays session-gated, for the
+    // members-only Directory tab) rather than loosening that one, so the
+    // two surfaces can never accidentally share a caching/access policy.
+    if (path.startsWith('/public/member-photo/') && request.method === 'GET') {
+      const userId = path.slice('/public/member-photo/'.length);
+      const photo = await getPhoto(env, userId);
+      if (!photo) return htmlResponse('Not found.', 404);
+      const bytes = base64ToBytes(photo.data);
+      return new Response(bytes, {
+        status: 200,
+        headers: {
+          'Content-Type': photo.contentType,
+          // Same short-cache reasoning as the gallery/droid photo routes —
+          // a removed photo should stop being servable quickly.
           'Cache-Control': 'public, max-age=300',
           'X-Content-Type-Options': 'nosniff',
         },
