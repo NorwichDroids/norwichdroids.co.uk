@@ -91,7 +91,7 @@ const SEED_BUILD_LOGS = [
 // club's first admin has been created.
 const SETUP_TOKEN = '9856825dfffddf49fc0139a57840850be646264818193ba5';
 
-const TABS = ['events', 'directory', 'logs', 'gallery'];
+const TABS = ['events', 'directory', 'logs', 'gallery', 'droids'];
 const SESSION_COOKIE = 'nd_session';
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 const PBKDF2_ITERATIONS = 100000;
@@ -423,6 +423,40 @@ async function getGalleryPhotoBlob(env, id) {
 
 async function deleteGalleryPhotoBlob(env, id) {
   await env.DATA.delete(`galleryphoto:${id}`);
+}
+
+// --- Droid showcase (members add, admin moderates) -----------------------
+// Photos of members' own droids for the public homepage's "Our Droids"
+// section — same index-plus-blob split as gallery photos, and also served
+// without a session, since the public homepage reads them directly.
+
+async function getDroidShowcase(env) {
+  const raw = await env.DATA.get('droidshowcaseindex');
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveDroidShowcase(env, items) {
+  await env.DATA.put('droidshowcaseindex', JSON.stringify(items));
+}
+
+async function saveDroidShowcasePhoto(env, id, contentType, base64Data) {
+  await env.DATA.put(`droidshowcasephoto:${id}`, JSON.stringify({ contentType, data: base64Data }));
+}
+
+async function getDroidShowcasePhoto(env, id) {
+  const raw = await env.DATA.get(`droidshowcasephoto:${id}`);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+async function deleteDroidShowcasePhoto(env, id) {
+  await env.DATA.delete(`droidshowcasephoto:${id}`);
 }
 
 // --- Events (admin-editable) --------------------------------------------
@@ -967,6 +1001,53 @@ function galleryTabHTML(galleryItems, currentUser, error, notice) {
     </div>`;
 }
 
+function droidsTabHTML(droidShowcase, currentUser, error, notice) {
+  const cards = droidShowcase.length === 0
+    ? `<p class="sub">No droid photos yet — be the first to add yours with the form on the right.</p>`
+    : `<div class="card-grid">${droidShowcase.map((d) => `
+      <div class="card">
+        <div class="thumb"><img src="/public/droid-photo/${esc(d.id)}" alt="${esc(d.droidName || d.droidType)}"></div>
+        <div class="body">
+          <h4>${esc(d.droidName || d.droidType)}</h4>
+          <p>${d.droidName ? `${esc(d.droidType)} &middot; ` : ''}Built by ${esc(d.builderName)}${d.caption ? ` &mdash; ${esc(d.caption)}` : ''}</p>
+        </div>
+      </div>`).join('')}</div>`;
+
+  return `
+    <div class="split-layout">
+      <div class="split-main">${cards}</div>
+      <aside class="split-sidebar">
+        <div class="login-card" style="max-width:none; margin:0;">
+          <h1 style="font-size:16px; text-align:left;">Add Your Droid</h1>
+          ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
+          ${notice ? `<div class="admin-success">${esc(notice)}</div>` : ''}
+          <form method="post" action="/members/droids/upload" enctype="multipart/form-data">
+            <div class="field">
+              <label for="droid_type">Droid Type</label>
+              <select id="droid_type" name="droid_type" required>
+                ${DROID_OPTIONS.map((opt) => `<option value="${esc(opt)}">${esc(opt)}</option>`).join('')}
+              </select>
+            </div>
+            <div class="field">
+              <label for="droid_name">Droid Name <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span></label>
+              <input type="text" id="droid_name" name="droid_name" maxlength="60" placeholder="e.g. R5-D3">
+            </div>
+            <div class="field">
+              <label for="droid_photo">Photo</label>
+              <input type="file" id="droid_photo" name="photo" accept="image/jpeg,image/png,image/webp" required>
+            </div>
+            <div class="field">
+              <label for="droid_caption">Caption <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span></label>
+              <input type="text" id="droid_caption" name="caption" maxlength="140" placeholder="e.g. Fully driven, working periscope">
+            </div>
+            <button type="submit" class="btn btn-primary">Add Photo</button>
+          </form>
+          <p style="font-size:12px; color:var(--muted); margin:12px 0 0;">JPEG, PNG or WEBP, up to 1.5MB. Shown in the "Our Droids" section on the public homepage for everyone to see. An admin can remove photos from Admin &gt; Droids.</p>
+        </div>
+      </aside>
+    </div>`;
+}
+
 function dashNav(active, currentUser) {
   return `
 <div class="dash-nav">
@@ -976,6 +1057,7 @@ function dashNav(active, currentUser) {
     <a href="/members/dashboard?tab=directory" class="${active === 'directory' ? 'active' : ''}">Directory</a>
     <a href="/members/dashboard?tab=logs" class="${active === 'logs' ? 'active' : ''}">Build Logs</a>
     <a href="/members/dashboard?tab=gallery" class="${active === 'gallery' ? 'active' : ''}">Gallery</a>
+    <a href="/members/dashboard?tab=droids" class="${active === 'droids' ? 'active' : ''}">Our Droids</a>
     ${currentUser.role === 'admin' ? `<a href="/members/admin" class="${active === 'admin' ? 'active' : ''}">Admin</a>` : ''}
     <a href="/members/change-password" class="${active === 'change-password' ? 'active' : ''}">My Account</a>
     <a class="view-public" href="/">View public site</a>
@@ -984,10 +1066,11 @@ function dashNav(active, currentUser) {
 </div>`;
 }
 
-function dashboardHTML({ tab, openEventId, events, rsvps, addedDroids, users, buildLogs, logError, logNotice, galleryItems, galleryError, galleryNotice, eventsError, eventsNotice, currentUser }) {
+function dashboardHTML({ tab, openEventId, events, rsvps, addedDroids, users, buildLogs, logError, logNotice, galleryItems, galleryError, galleryNotice, droidShowcase, droidsError, droidsNotice, eventsError, eventsNotice, currentUser }) {
   const content = tab === 'events' ? eventsTabHTML(events, rsvps, addedDroids, openEventId, eventsError, eventsNotice)
     : tab === 'directory' ? directoryTabHTML(users)
     : tab === 'gallery' ? galleryTabHTML(galleryItems, currentUser, galleryError, galleryNotice)
+    : tab === 'droids' ? droidsTabHTML(droidShowcase || [], currentUser, droidsError, droidsNotice)
     : logsTabHTML(buildLogs, currentUser, logError, logNotice);
 
   return `<!doctype html>
@@ -1003,7 +1086,7 @@ ${dashNav(tab, currentUser)}
 }
 
 function changePasswordHTML(currentUser, state = {}) {
-  const { pwError, pwSuccess, photoError, photoSuccess, bioError, bioSuccess } = state;
+  const { pwError, pwSuccess, photoError, photoSuccess, bioError, bioSuccess, nicknameError, nicknameSuccess } = state;
   return `<!doctype html>
 <html lang="en"><head>${HEAD}<title>My Account — Norwich Droids</title></head>
 <body>
@@ -1032,6 +1115,20 @@ ${dashNav('change-password', currentUser)}
       </div>
     </div>
     <p style="font-size:12.5px; color:var(--muted); margin:14px 0 0;">JPEG, PNG or WEBP, up to 1.5MB. Visible to other logged-in members in the Directory.</p>
+  </div>
+
+  <div class="login-card" style="max-width:420px; margin:0 0 28px;">
+    <h1 style="font-size:16px; text-align:left;">Nickname</h1>
+    ${nicknameError ? `<div class="login-error">${esc(nicknameError)}</div>` : ''}
+    ${nicknameSuccess ? `<div class="admin-success">${esc(nicknameSuccess)}</div>` : ''}
+    <form method="post" action="/members/account/nickname">
+      <div class="field">
+        <label for="nickname">What we call you</label>
+        <input type="text" id="nickname" name="nickname" maxlength="40" value="${esc(currentUser.nickname || '')}" placeholder="e.g. Chewy">
+      </div>
+      <button type="submit" class="btn btn-primary">Save Nickname</button>
+    </form>
+    <p style="font-size:12.5px; color:var(--muted); margin:14px 0 0;">Shown alongside your name on the public About page's Meet the Members section, once you've saved one. Leave it blank to not show one.</p>
   </div>
 
   <div class="login-card" style="max-width:420px; margin:0 0 28px;">
@@ -1075,6 +1172,7 @@ function adminSubNav(active) {
     <a href="/members/admin/events" class="${active === 'events' ? 'active' : ''}">Events</a>
     <a href="/members/admin/logs" class="${active === 'logs' ? 'active' : ''}">Build Logs</a>
     <a href="/members/admin/gallery" class="${active === 'gallery' ? 'active' : ''}">Gallery</a>
+    <a href="/members/admin/droids" class="${active === 'droids' ? 'active' : ''}">Droids</a>
   </div>`;
 }
 
@@ -1440,6 +1538,53 @@ document.querySelectorAll('form[action="/members/admin/gallery/delete"]').forEac
 </body></html>`;
 }
 
+function adminDroidsHTML({ currentUser, droidShowcase, error, notice }) {
+  const rows = droidShowcase.map((d) => `
+    <tr>
+      <td><div class="thumb" style="width:64px; height:64px; border-radius:4px;"><img src="/public/droid-photo/${esc(d.id)}" alt=""></div></td>
+      <td>${esc(d.droidName || d.droidType)}${d.droidName ? `<div style="font-size:12px; color:var(--muted);">${esc(d.droidType)}</div>` : ''}</td>
+      <td>${esc(d.builderName)}</td>
+      <td style="white-space:normal; max-width:240px;">${d.caption ? esc(d.caption) : '<span style="color:var(--muted);">&mdash;</span>'}</td>
+      <td class="admin-actions">
+        <form method="post" action="/members/admin/droids/delete" onsubmit="return false;" data-photo="${esc(d.droidName || d.droidType)}">
+          <input type="hidden" name="droid_id" value="${esc(d.id)}">
+          <button type="submit" class="btn-small btn-danger">Delete</button>
+        </form>
+      </td>
+    </tr>`).join('');
+
+  return `<!doctype html>
+<html lang="en"><head>${HEAD}<title>Admin · Droids — Norwich Droids</title></head>
+<body>
+${dashNav('admin', currentUser)}
+<div class="dash-main">
+  <h1>Admin</h1>
+  <p class="sub">Remove photos from the public homepage's "Our Droids" section. Members add their own from the Our Droids tab.</p>
+  ${adminSubNav('droids')}
+
+  ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
+  ${notice ? `<div class="admin-success">${esc(notice)}</div>` : ''}
+
+  <div class="admin-table-wrap">
+    <table class="admin-table">
+      <thead><tr><th>Photo</th><th>Droid</th><th>Builder</th><th>Caption</th><th>Actions</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="5">No droid photos yet.</td></tr>`}</tbody>
+    </table>
+  </div>
+</div>
+<script>
+document.querySelectorAll('form[action="/members/admin/droids/delete"]').forEach((f) => {
+  f.addEventListener('submit', () => {
+    if (confirm('Delete this photo of ' + f.dataset.photo + '? This cannot be undone.')) {
+      f.removeAttribute('onsubmit');
+      HTMLFormElement.prototype.submit.call(f);
+    }
+  });
+});
+</script>
+</body></html>`;
+}
+
 function setupPageHTML(error) {
   return `<!doctype html>
 <html lang="en"><head>${HEAD}<title>First-time Setup — Norwich Droids</title></head>
@@ -1479,11 +1624,11 @@ export default {
     const path = url.pathname;
 
     // --- Public API — no login required. Only ever returns fields a member
-    // has chosen to make public (name/droid/bio, or a gallery photo they
+    // has chosen to make public (name/nickname/droid/bio, or a gallery photo they
     // uploaded) — never email, password data, or anything else account-related.
     if (path === '/api/members' && request.method === 'GET') {
       const users = await listUsers(env);
-      const publicMembers = users.map((u) => ({ name: u.name, droid: u.droid || '', bio: u.bio || '' }));
+      const publicMembers = users.map((u) => ({ name: u.name, nickname: u.nickname || '', droid: u.droid || '', bio: u.bio || '' }));
       return new Response(JSON.stringify(publicMembers), {
         status: 200,
         headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
@@ -1533,6 +1678,35 @@ export default {
           // admin can delete it at any time, and this route is public with
           // no way to bust a shared/cached URL — keep the caching window
           // short so a moderated-away photo stops being servable quickly.
+          'Cache-Control': 'public, max-age=300',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
+    }
+
+    // Public, no login required — fuels the "Our Droids" section on the
+    // public homepage.
+    if (path === '/api/droids' && request.method === 'GET') {
+      const droidShowcase = await getDroidShowcase(env);
+      const publicItems = droidShowcase.map((d) => ({
+        id: d.id, droidType: d.droidType, droidName: d.droidName || '', caption: d.caption || '', builderName: d.builderName,
+      }));
+      return new Response(JSON.stringify(publicItems), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
+      });
+    }
+
+    if (path.startsWith('/public/droid-photo/') && request.method === 'GET') {
+      const id = path.slice('/public/droid-photo/'.length);
+      const photo = await getDroidShowcasePhoto(env, id);
+      if (!photo) return htmlResponse('Not found.', 404);
+      const bytes = base64ToBytes(photo.data);
+      return new Response(bytes, {
+        status: 200,
+        headers: {
+          'Content-Type': photo.contentType,
+          // Same short-cache reasoning as the gallery photo route above.
           'Cache-Control': 'public, max-age=300',
           'X-Content-Type-Options': 'nosniff',
         },
@@ -1610,9 +1784,10 @@ export default {
       const users = tab === 'directory' ? await listUsers(env) : [];
       const buildLogs = tab === 'logs' ? await getBuildLogs(env) : [];
       const galleryItems = tab === 'gallery' ? await getGalleryIndex(env) : [];
+      const droidShowcase = tab === 'droids' ? await getDroidShowcase(env) : [];
       return htmlResponse(dashboardHTML({
-        tab, openEventId: url.searchParams.get('open') || '', events, rsvps, addedDroids, users, buildLogs, galleryItems,
-        eventsError: '', eventsNotice: '', currentUser,
+        tab, openEventId: url.searchParams.get('open') || '', events, rsvps, addedDroids, users, buildLogs, galleryItems, droidShowcase,
+        eventsError: '', eventsNotice: '', droidsError: '', droidsNotice: '', currentUser,
       }));
     }
 
@@ -1756,6 +1931,54 @@ export default {
       }));
     }
 
+    if (path === '/members/droids/upload' && request.method === 'POST') {
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      const renderWith = async (droidsError, droidsNotice) => {
+        const droidShowcase = await getDroidShowcase(env);
+        return htmlResponse(dashboardHTML({
+          tab: 'droids', openEventId: '', events: [], rsvps: {}, addedDroids: {}, users: [], buildLogs: [],
+          galleryItems: [], droidShowcase, droidsError, droidsNotice, currentUser,
+        }));
+      };
+
+      const form = await request.formData();
+      const droidType = String(form.get('droid_type') || '').trim();
+      const droidName = String(form.get('droid_name') || '').trim().slice(0, 60);
+      const caption = String(form.get('caption') || '').trim().slice(0, 140);
+      const file = form.get('photo');
+      if (!droidType) {
+        return await renderWith('Please choose a droid type.', '');
+      }
+      if (!file || typeof file === 'string' || !file.size) {
+        return await renderWith('Please choose a photo to upload.', '');
+      }
+      if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
+        return await renderWith('Photos must be JPEG, PNG, or WEBP.', '');
+      }
+      if (file.size > MAX_PHOTO_UPLOAD_BYTES) {
+        return await renderWith('That photo is too large to upload — please use a file under 8MB.', '');
+      }
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (!matchesDeclaredImageType(bytes, file.type)) {
+        return await renderWith("That file doesn't look like a valid image.", '');
+      }
+      const prepared = await prepareUploadedPhoto(bytes, file.type);
+      if (prepared.errorMessage) {
+        return await renderWith(prepared.errorMessage, '');
+      }
+      const id = crypto.randomUUID();
+      await saveDroidShowcasePhoto(env, id, prepared.contentType, bytesToBase64(prepared.bytes));
+      const droidShowcase = await getDroidShowcase(env);
+      droidShowcase.unshift({ id, builderName: currentUser.name, droidType, droidName, caption, createdAt: new Date().toISOString() });
+      await saveDroidShowcase(env, droidShowcase);
+      return htmlResponse(dashboardHTML({
+        tab: 'droids', openEventId: '', events: [], rsvps: {}, addedDroids: {}, users: [], buildLogs: [],
+        galleryItems: [], droidShowcase, droidsError: '', droidsNotice: 'Photo added — now visible on the public homepage.', currentUser,
+      }));
+    }
+
     // Any logged-in member can propose an event; it only reaches the real
     // calendar once an admin approves it from Admin > Events.
     if (path === '/members/events/submit' && request.method === 'POST') {
@@ -1870,6 +2093,17 @@ export default {
       currentUser.bio = bio;
       await saveUser(env, currentUser);
       return htmlResponse(changePasswordHTML(currentUser, { bioSuccess: bio ? 'Description updated.' : 'Description cleared.' }));
+    }
+
+    if (path === '/members/account/nickname' && request.method === 'POST') {
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      const form = await request.formData();
+      const nickname = String(form.get('nickname') || '').trim().slice(0, 40);
+      currentUser.nickname = nickname;
+      await saveUser(env, currentUser);
+      return htmlResponse(changePasswordHTML(currentUser, { nicknameSuccess: nickname ? 'Nickname updated.' : 'Nickname cleared.' }));
     }
 
     if (path.startsWith('/members/photo/') && request.method === 'GET') {
@@ -2237,6 +2471,27 @@ export default {
         await saveGalleryIndex(env, remaining);
         await deleteGalleryPhotoBlob(env, photoId);
         return htmlResponse(adminGalleryHTML({ currentUser, galleryItems: remaining, error: '', notice: 'Photo deleted.' }));
+      }
+
+      // --- Droid showcase moderation -------------------------------------
+
+      if (path === '/members/admin/droids' && request.method === 'GET') {
+        const droidShowcase = await getDroidShowcase(env);
+        return htmlResponse(adminDroidsHTML({ currentUser, droidShowcase, error: '', notice: '' }));
+      }
+
+      if (path === '/members/admin/droids/delete' && request.method === 'POST') {
+        const form = await request.formData();
+        const droidId = String(form.get('droid_id') || '');
+        const droidShowcase = await getDroidShowcase(env);
+        const target = droidShowcase.find((d) => d.id === droidId);
+        if (!target) {
+          return htmlResponse(adminDroidsHTML({ currentUser, droidShowcase, error: 'Photo not found.', notice: '' }), 400);
+        }
+        const remaining = droidShowcase.filter((d) => d.id !== droidId);
+        await saveDroidShowcase(env, remaining);
+        await deleteDroidShowcasePhoto(env, droidId);
+        return htmlResponse(adminDroidsHTML({ currentUser, droidShowcase: remaining, error: '', notice: 'Photo deleted.' }));
       }
 
       return htmlResponse('Not found.', 404);
