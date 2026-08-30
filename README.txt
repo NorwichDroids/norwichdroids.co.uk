@@ -111,15 +111,29 @@ itself — no dashboard steps needed:
     after a password change.
   - From "Admin -> Events" you can add, edit, or delete the events that
     show up on every member's Events tab (date, location, start time,
-    access time, parking, floor area, accommodation, fuel, a free-text
-    description for anything else members should know, and the droids
-    already confirmed for it). Start Time, Access Time, and the
-    description are all optional — leave any of them blank and that part
-    just doesn't show. Deleting an event also clears any RSVPs/added-droids
-    that were logged against it. This is the members-area event list (with
-    logistics and RSVP) — it's separate from the public Events page at
-    public/events.html, which still just links out to each convention's
-    own website (see section 5).
+    access time, organiser, parking, floor area, accommodation, fuel, a
+    free-text description for anything else members should know, and the
+    droids already confirmed for it). The date is picked from a real
+    calendar widget rather than typed in — pick just a start date for a
+    single-day event, or also fill in an end date for a multi-day one.
+    Start Time, Access Time, Organiser, and the description are all
+    optional — leave any of them blank and that part just doesn't show.
+    Deleting an event also clears any RSVPs/added-droids that were logged
+    against it. This is the members-area event list (with logistics and
+    RSVP) — it's separate from the public Events page at public/events.html,
+    which still just links out to each convention's own website (see
+    section 5).
+  - Members aren't limited to just watching the calendar — from their own
+    Events tab there's a "Suggest an Event" form where any member can
+    propose a new event (title, date, location, organiser, and a
+    description). It doesn't show up on anyone's calendar right away —
+    it lands in a "Pending Approval" queue at the top of Admin -> Events,
+    where an admin can Approve it (which adds it to the real calendar,
+    same as if an admin had typed it in directly) or Reject it (which just
+    discards the suggestion). Member-submitted events don't include the
+    admin-only logistics fields (parking, floor area, accommodation, fuel)
+    — an admin can fill those in afterwards by editing the approved event
+    if needed.
   - Every member (not just admins) can add a profile photo from
     "My Account" — JPEG, PNG, or WEBP — which then shows next to their name
     in the Directory tab instead of their initials. Photos are only ever
@@ -258,9 +272,17 @@ dashboard directly.
 Build log posts live under a single "buildlogs" key, and a post's optional
 photo (if it has one) lives under its own "buildlogphoto:<id>" key, same
 pattern as gallery photos — but served only to logged-in members, never
-publicly. The three new event fields (start time, access time,
-description) are just extra fields on each event inside the "events" key,
-same as the ones that were already there.
+publicly. Start time, access time, organiser, and description are just
+extra fields on each event inside the "events" key, same as the ones that
+were already there — as is the event's year, now that events are entered
+through a date picker rather than typed in by hand.
+
+Member-submitted event suggestions live under a separate "pendingEvents"
+key — entirely separate from the live "events" key, so a suggestion never
+shows up on anyone's calendar or in RSVPs until an admin approves it from
+Admin -> Events. Approving one moves it into the "events" key (generating
+it a proper event id, same as an admin-added event); rejecting one just
+removes it from "pendingEvents" — nothing is kept.
 
 Two small pieces of the site are deliberately public with no login at
 all, because they power the public About and Gallery pages: the member
