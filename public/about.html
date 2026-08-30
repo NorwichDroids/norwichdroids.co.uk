@@ -94,7 +94,15 @@
 
       var thumb = document.createElement('div');
       thumb.className = 'thumb';
-      thumb.textContent = 'PHOTO';
+      if (m.hasPhoto && m.id) {
+        var img = document.createElement('img');
+        img.src = '/public/member-photo/' + encodeURIComponent(m.id) + '?v=' + encodeURIComponent(m.photoUpdatedAt || 0);
+        img.alt = m.name || '';
+        img.loading = 'lazy';
+        thumb.appendChild(img);
+      } else {
+        thumb.textContent = 'PHOTO';
+      }
       card.appendChild(thumb);
 
       var body = document.createElement('div');
