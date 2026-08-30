@@ -9,7 +9,10 @@
 // very first admin account is created once, automatically, by visiting the
 // one-time setup link described in README.txt.
 
-const EVENTS = [
+// Starting event list — only used to seed the "events" KV key the very
+// first time the site runs. After that, admins manage events entirely from
+// the Admin > Events page, and this array is never read again.
+const SEED_EVENTS = [
   {
     id: 'charity', day: '05', daySmall: false, month: 'SEP',
     title: 'Feel The Force Day — Team Meet Point', location: 'Peterborough Cathedral, Peterborough',
@@ -79,6 +82,13 @@ const PBKDF2_ITERATIONS = 100000;
 const UNKNOWN_EMAIL_DUMMY_SALT = 'a'.repeat(32);
 const UNKNOWN_EMAIL_DUMMY_HASH = 'b'.repeat(64);
 
+// Profile photos are stored as base64 in the same KV namespace as everything
+// else (no R2 bucket needed — one less thing to configure). Kept small on
+// purpose: KV values top out at 25MB and base64 adds ~33% overhead, but the
+// real reason for the cap is fast page loads for members on the go.
+const MAX_PHOTO_BYTES = 1.5 * 1024 * 1024; // 1.5MB
+const ALLOWED_PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+
 function esc(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -128,6 +138,45 @@ function hexToBytes(hex) {
 
 function randomHex(byteLen) {
   return bytesToHex(crypto.getRandomValues(new Uint8Array(byteLen)));
+}
+
+// btoa/atob work in both the Workers runtime and Node, so this needs no
+// external dependency. Chunked to avoid blowing the call stack on
+// String.fromCharCode.apply for a multi-megabyte image.
+function bytesToBase64(bytes) {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+// The browser-supplied Content-Type on a multipart upload is just a label
+// the client chose — never trust it alone. Checking the file's magic bytes
+// confirms it's actually the image format it claims to be, not just
+// something wearing an image/* label.
+function matchesDeclaredImageType(bytes, declaredType) {
+  if (declaredType === 'image/png') {
+    const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    return sig.every((b, i) => bytes[i] === b);
+  }
+  if (declaredType === 'image/jpeg') {
+    return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  }
+  if (declaredType === 'image/webp') {
+    const riff = bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46;
+    const webp = bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50;
+    return riff && webp;
+  }
+  return false;
 }
 
 // Passwords are hashed with PBKDF2-SHA256 via the platform's native Web
@@ -195,6 +244,81 @@ async function listUsers(env) {
 async function anyAdminExists(env) {
   const users = await listUsers(env);
   return users.some((u) => u.role === 'admin');
+}
+
+// --- Profile photos -----------------------------------------------------
+
+async function savePhoto(env, userId, contentType, base64Data) {
+  await env.DATA.put(`photo:${userId}`, JSON.stringify({ contentType, data: base64Data }));
+}
+
+async function getPhoto(env, userId) {
+  const raw = await env.DATA.get(`photo:${userId}`);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+async function deletePhoto(env, userId) {
+  await env.DATA.delete(`photo:${userId}`);
+}
+
+// --- Events (admin-editable) --------------------------------------------
+
+async function getEvents(env) {
+  const raw = await env.DATA.get('events');
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    } catch { /* fall through to reseed */ }
+  }
+  // First run — seed KV with the built-in defaults so nothing changes for
+  // sites that were already live before events became editable.
+  await env.DATA.put('events', JSON.stringify(SEED_EVENTS));
+  return SEED_EVENTS;
+}
+
+async function saveEvents(env, events) {
+  await env.DATA.put('events', JSON.stringify(events));
+}
+
+function slugify(str) {
+  return String(str).toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+}
+
+function uniqueEventId(events, base) {
+  const root = base || 'event';
+  let id = root;
+  let n = 2;
+  const existing = new Set(events.map((e) => e.id));
+  while (existing.has(id)) {
+    id = `${root}-${n}`;
+    n += 1;
+  }
+  return id;
+}
+
+// Base droids are edited as plain text in the admin form, one per line,
+// "Name | Droid Type" — simpler than a dynamic add/remove row UI for a
+// small club committee to use.
+function parseBaseDroids(text) {
+  return String(text || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [namePart, droidPart] = line.split('|');
+      const name = (namePart || '').trim();
+      const droid = (droidPart || '').trim();
+      return { name: name || '[Member Name]', droid: droid || 'R2 Unit' };
+    });
+}
+
+function formatBaseDroids(baseDroids) {
+  return (Array.isArray(baseDroids) ? baseDroids : []).map((d) => `${d.name} | ${d.droid}`).join('\n');
 }
 
 // Session values carry the user's sessionVersion at login time, so that
@@ -317,8 +441,11 @@ ${publicFoot()}
 </body></html>`;
 }
 
-function eventsTabHTML(rsvps, addedDroids, openEventId) {
-  return EVENTS.map((ev) => {
+function eventsTabHTML(events, rsvps, addedDroids, openEventId) {
+  if (events.length === 0) {
+    return `<p class="sub">No events on the calendar right now — an admin can add one from Admin &gt; Events.</p>`;
+  }
+  return events.map((ev) => {
     const status = rsvps[ev.id] || 'undecided';
     const goingClass = status === 'going' ? ' going' : '';
     const rsvpLabel = status === 'going' ? 'Going' : (status === 'not-going' ? "Can't make it" : 'RSVP');
@@ -388,7 +515,9 @@ function directoryTabHTML(users) {
   }
   return `<div class="directory-grid">${users.map((m) => `
       <div class="directory-card">
-        <div class="avatar">${esc(initials(m.name))}</div>
+        ${m.hasPhoto
+          ? `<img class="avatar-img" src="/members/photo/${esc(m.id)}?v=${esc(m.photoUpdatedAt || 0)}" alt="${esc(m.name)}">`
+          : `<div class="avatar">${esc(initials(m.name))}</div>`}
         <div>
           <div class="name">${esc(m.name)}${m.role === 'admin' ? ' <span class="role-badge">Admin</span>' : ''}</div>
           <div class="droid">${m.droid ? `Building: ${esc(m.droid)}` : 'No build listed yet'}</div>
@@ -423,8 +552,8 @@ function dashNav(active, currentUser) {
 </div>`;
 }
 
-function dashboardHTML({ tab, openEventId, rsvps, addedDroids, users, currentUser }) {
-  const content = tab === 'events' ? eventsTabHTML(rsvps, addedDroids, openEventId)
+function dashboardHTML({ tab, openEventId, events, rsvps, addedDroids, users, currentUser }) {
+  const content = tab === 'events' ? eventsTabHTML(events, rsvps, addedDroids, openEventId)
     : tab === 'directory' ? directoryTabHTML(users)
     : logsTabHTML();
 
@@ -440,7 +569,8 @@ ${dashNav(tab, currentUser)}
 </body></html>`;
 }
 
-function changePasswordHTML(currentUser, error, success) {
+function changePasswordHTML(currentUser, state = {}) {
+  const { pwError, pwSuccess, photoError, photoSuccess } = state;
   return `<!doctype html>
 <html lang="en"><head>${HEAD}<title>My Account — Norwich Droids</title></head>
 <body>
@@ -449,10 +579,32 @@ ${dashNav('change-password', currentUser)}
   <h1>My Account</h1>
   <p class="sub">${esc(currentUser.name)} &middot; ${esc(currentUser.email)}${currentUser.role === 'admin' ? ' &middot; Admin' : ''}</p>
 
+  <div class="login-card" style="max-width:420px; margin:0 0 28px;">
+    <h1 style="font-size:16px; text-align:left;">Profile Photo</h1>
+    ${photoError ? `<div class="login-error">${esc(photoError)}</div>` : ''}
+    ${photoSuccess ? `<div class="admin-success">${esc(photoSuccess)}</div>` : ''}
+    <div class="photo-row">
+      ${currentUser.hasPhoto
+        ? `<img class="avatar-img avatar-img-lg" src="/members/photo/${esc(currentUser.id)}?v=${esc(currentUser.photoUpdatedAt || 0)}" alt="${esc(currentUser.name)}">`
+        : `<div class="avatar avatar-lg">${esc(initials(currentUser.name))}</div>`}
+      <div class="photo-actions">
+        <form method="post" action="/members/account/photo" enctype="multipart/form-data">
+          <input type="file" name="photo" accept="image/jpeg,image/png,image/webp" required>
+          <button type="submit" class="btn-small" style="margin-top:8px;">Upload Photo</button>
+        </form>
+        ${currentUser.hasPhoto ? `
+        <form method="post" action="/members/account/photo/remove" style="margin-top:8px;">
+          <button type="submit" class="btn-small btn-danger">Remove Photo</button>
+        </form>` : ''}
+      </div>
+    </div>
+    <p style="font-size:12.5px; color:var(--muted); margin:14px 0 0;">JPEG, PNG or WEBP, up to 1.5MB. Visible to other logged-in members in the Directory.</p>
+  </div>
+
   <div class="login-card" style="max-width:420px; margin:0;">
     <h1 style="font-size:16px; text-align:left;">Change Password</h1>
-    ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
-    ${success ? `<div class="admin-success">${esc(success)}</div>` : ''}
+    ${pwError ? `<div class="login-error">${esc(pwError)}</div>` : ''}
+    ${pwSuccess ? `<div class="admin-success">${esc(pwSuccess)}</div>` : ''}
     <form method="post" action="/members/change-password">
       <div class="field">
         <label for="current_password">Current password</label>
@@ -467,6 +619,14 @@ ${dashNav('change-password', currentUser)}
   </div>
 </div>
 </body></html>`;
+}
+
+function adminSubNav(active) {
+  return `
+  <div class="admin-subnav">
+    <a href="/members/admin" class="${active === 'members' ? 'active' : ''}">Members</a>
+    <a href="/members/admin/events" class="${active === 'events' ? 'active' : ''}">Events</a>
+  </div>`;
 }
 
 function adminPageHTML({ currentUser, users, error, notice, generated }) {
@@ -500,6 +660,7 @@ ${dashNav('admin', currentUser)}
 <div class="dash-main">
   <h1>Admin</h1>
   <p class="sub">Add members, reset passwords, and manage admin access.</p>
+  ${adminSubNav('members')}
 
   ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
   ${notice ? `<div class="admin-success">${esc(notice)}</div>` : ''}
@@ -539,6 +700,112 @@ ${dashNav('admin', currentUser)}
 document.querySelectorAll('form[action="/members/admin/delete"]').forEach((f) => {
   f.addEventListener('submit', () => {
     if (confirm('Remove ' + f.dataset.user + '\\'s account? This cannot be undone.')) {
+      f.removeAttribute('onsubmit');
+      HTMLFormElement.prototype.submit.call(f);
+    }
+  });
+});
+</script>
+</body></html>`;
+}
+
+function eventFormFields(ev) {
+  const e = ev || {
+    id: '', day: '', daySmall: false, month: '', title: '', location: '',
+    parking: '', floorArea: '', accommodation: '', fuel: '', baseDroids: [],
+  };
+  return `
+      <div class="field">
+        <label for="ev_title">Event Title</label>
+        <input type="text" id="ev_title" name="title" value="${esc(e.title)}" required>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="ev_day">Day</label>
+          <input type="text" id="ev_day" name="day" value="${esc(e.day)}" placeholder="e.g. 05 or 26–27" required>
+        </div>
+        <div class="field">
+          <label for="ev_month">Month</label>
+          <input type="text" id="ev_month" name="month" value="${esc(e.month)}" placeholder="e.g. SEP" maxlength="4" required>
+        </div>
+      </div>
+      <div class="field field-checkbox">
+        <label><input type="checkbox" name="day_small" ${e.daySmall ? 'checked' : ''}> Date is a range (e.g. "26–27") — shows in smaller text</label>
+      </div>
+      <div class="field">
+        <label for="ev_location">Location</label>
+        <input type="text" id="ev_location" name="location" value="${esc(e.location)}" required>
+      </div>
+      <div class="field">
+        <label for="ev_parking">Parking</label>
+        <input type="text" id="ev_parking" name="parking" value="${esc(e.parking)}">
+      </div>
+      <div class="field">
+        <label for="ev_floor">Floor Area</label>
+        <input type="text" id="ev_floor" name="floor_area" value="${esc(e.floorArea)}">
+      </div>
+      <div class="field">
+        <label for="ev_accom">Accommodation</label>
+        <input type="text" id="ev_accom" name="accommodation" value="${esc(e.accommodation)}">
+      </div>
+      <div class="field">
+        <label for="ev_fuel">Fuel</label>
+        <input type="text" id="ev_fuel" name="fuel" value="${esc(e.fuel)}">
+      </div>
+      <div class="field">
+        <label for="ev_droids">Droids already confirmed &mdash; one per line, as <code>Name | Droid Type</code></label>
+        <textarea id="ev_droids" name="base_droids" rows="4" placeholder="Jane Smith | R2 Unit">${esc(formatBaseDroids(e.baseDroids))}</textarea>
+      </div>`;
+}
+
+function adminEventsHTML({ currentUser, events, error, notice, editingEvent }) {
+  const rows = events.map((ev) => `
+    <tr>
+      <td>${esc(ev.title)}</td>
+      <td>${esc(ev.day)} ${esc(ev.month)}</td>
+      <td>${esc(ev.location)}</td>
+      <td class="admin-actions">
+        <a class="btn-small" href="/members/admin/events?edit=${encodeURIComponent(ev.id)}">Edit</a>
+        <form method="post" action="/members/admin/events/delete" onsubmit="return false;" data-event="${esc(ev.title)}">
+          <input type="hidden" name="event_id" value="${esc(ev.id)}">
+          <button type="submit" class="btn-small btn-danger">Delete</button>
+        </form>
+      </td>
+    </tr>`).join('');
+
+  return `<!doctype html>
+<html lang="en"><head>${HEAD}<title>Admin · Events — Norwich Droids</title></head>
+<body>
+${dashNav('admin', currentUser)}
+<div class="dash-main">
+  <h1>Admin</h1>
+  <p class="sub">Add, edit, or remove upcoming events and appearances.</p>
+  ${adminSubNav('events')}
+
+  ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
+  ${notice ? `<div class="admin-success">${esc(notice)}</div>` : ''}
+
+  <div class="login-card" style="max-width:560px; margin:0 0 40px;">
+    <h1 style="font-size:16px; text-align:left;">${editingEvent ? `Edit &ldquo;${esc(editingEvent.title)}&rdquo;` : 'Add an Event'}</h1>
+    <form method="post" action="${editingEvent ? '/members/admin/events/update' : '/members/admin/events/add'}">
+      ${editingEvent ? `<input type="hidden" name="event_id" value="${esc(editingEvent.id)}">` : ''}
+      ${eventFormFields(editingEvent)}
+      <button type="submit" class="btn btn-primary">${editingEvent ? 'Save Changes' : 'Add Event'}</button>
+      ${editingEvent ? `<a href="/members/admin/events" class="btn-small" style="margin-left:10px;">Cancel</a>` : ''}
+    </form>
+  </div>
+
+  <div class="admin-table-wrap">
+    <table class="admin-table">
+      <thead><tr><th>Title</th><th>Date</th><th>Location</th><th>Actions</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="4">No events yet.</td></tr>`}</tbody>
+    </table>
+  </div>
+</div>
+<script>
+document.querySelectorAll('form[action="/members/admin/events/delete"]').forEach((f) => {
+  f.addEventListener('submit', () => {
+    if (confirm('Delete \\u201c' + f.dataset.event + '\\u201d? This also clears its RSVPs and added droids. This cannot be undone.')) {
       f.removeAttribute('onsubmit');
       HTMLFormElement.prototype.submit.call(f);
     }
@@ -650,12 +917,13 @@ export default {
     if (path === '/members/dashboard') {
       const currentUser = await getSessionUser(request, env);
       if (!currentUser) return redirect('/members/login');
+      const events = await getEvents(env);
       const rsvps = await readJSON(env, 'rsvps');
       const addedDroids = await readJSON(env, 'droids');
       const tab = pickTab(url);
       const users = tab === 'directory' ? await listUsers(env) : [];
       return htmlResponse(dashboardHTML({
-        tab, openEventId: url.searchParams.get('open') || '', rsvps, addedDroids, users, currentUser,
+        tab, openEventId: url.searchParams.get('open') || '', events, rsvps, addedDroids, users, currentUser,
       }));
     }
 
@@ -664,7 +932,8 @@ export default {
       if (!currentUser) return redirect('/members/login');
       const form = await request.formData();
       const eventId = String(form.get('event_id') || '');
-      if (EVENTS.some((e) => e.id === eventId)) {
+      const events = await getEvents(env);
+      if (events.some((e) => e.id === eventId)) {
         const rsvps = await readJSON(env, 'rsvps');
         const current = rsvps[eventId] || 'undecided';
         rsvps[eventId] = current === 'going' ? 'not-going' : 'going';
@@ -683,7 +952,8 @@ export default {
       const otherDroid = String(form.get('other_droid') || '').trim();
       if (droid === 'Other Build' && otherDroid !== '') droid = otherDroid;
 
-      if (EVENTS.some((e) => e.id === eventId) && name !== '' && droid !== '') {
+      const events = await getEvents(env);
+      if (events.some((e) => e.id === eventId) && name !== '' && droid !== '') {
         const droids = await readJSON(env, 'droids');
         if (!Array.isArray(droids[eventId])) droids[eventId] = [];
         droids[eventId].push({ name, droid, initials: initials(name) });
@@ -697,17 +967,17 @@ export default {
       if (!currentUser) return redirect('/members/login');
 
       if (request.method === 'GET') {
-        return htmlResponse(changePasswordHTML(currentUser, '', ''));
+        return htmlResponse(changePasswordHTML(currentUser, {}));
       }
 
       const form = await request.formData();
       const currentPassword = String(form.get('current_password') || '');
       const newPassword = String(form.get('new_password') || '');
       if (!(await verifyPassword(currentPassword, currentUser.passwordSalt, currentUser.passwordHash))) {
-        return htmlResponse(changePasswordHTML(currentUser, 'Your current password is not right.', ''), 401);
+        return htmlResponse(changePasswordHTML(currentUser, { pwError: 'Your current password is not right.' }), 401);
       }
       if (newPassword.length < 8) {
-        return htmlResponse(changePasswordHTML(currentUser, 'New password must be at least 8 characters.', ''), 400);
+        return htmlResponse(changePasswordHTML(currentUser, { pwError: 'New password must be at least 8 characters.' }), 400);
       }
       const { saltHex, hash } = await hashNewPassword(newPassword);
       currentUser.passwordSalt = saltHex;
@@ -715,7 +985,64 @@ export default {
       currentUser.sessionVersion = (currentUser.sessionVersion || 0) + 1; // invalidates any other logged-in sessions for this account
       await saveUser(env, currentUser);
       const token = await createSession(env, currentUser); // keep this browser logged in under the new session version
-      return htmlResponse(changePasswordHTML(currentUser, '', 'Password updated.'), 200, sessionCookieHeader(token));
+      return htmlResponse(changePasswordHTML(currentUser, { pwSuccess: 'Password updated.' }), 200, sessionCookieHeader(token));
+    }
+
+    if (path === '/members/account/photo' && request.method === 'POST') {
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      const form = await request.formData();
+      const file = form.get('photo');
+      if (!file || typeof file === 'string' || !file.size) {
+        return htmlResponse(changePasswordHTML(currentUser, { photoError: 'Please choose a photo to upload.' }), 400);
+      }
+      if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
+        return htmlResponse(changePasswordHTML(currentUser, { photoError: 'Photos must be JPEG, PNG, or WEBP.' }), 400);
+      }
+      if (file.size > MAX_PHOTO_BYTES) {
+        return htmlResponse(changePasswordHTML(currentUser, { photoError: 'That photo is too large — please use one under 1.5MB.' }), 400);
+      }
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (!matchesDeclaredImageType(bytes, file.type)) {
+        return htmlResponse(changePasswordHTML(currentUser, { photoError: "That file doesn't look like a valid image." }), 400);
+      }
+      await savePhoto(env, currentUser.id, file.type, bytesToBase64(bytes));
+      currentUser.hasPhoto = true;
+      currentUser.photoUpdatedAt = Date.now();
+      await saveUser(env, currentUser);
+      return htmlResponse(changePasswordHTML(currentUser, { photoSuccess: 'Photo updated.' }));
+    }
+
+    if (path === '/members/account/photo/remove' && request.method === 'POST') {
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      await deletePhoto(env, currentUser.id);
+      currentUser.hasPhoto = false;
+      delete currentUser.photoUpdatedAt;
+      await saveUser(env, currentUser);
+      return htmlResponse(changePasswordHTML(currentUser, { photoSuccess: 'Photo removed.' }));
+    }
+
+    if (path.startsWith('/members/photo/') && request.method === 'GET') {
+      // Photos are only ever shown inside the members directory, so serving
+      // them is gated behind a session too — not a public URL.
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      const userId = path.slice('/members/photo/'.length);
+      const photo = await getPhoto(env, userId);
+      if (!photo) return htmlResponse('Not found.', 404);
+      const bytes = base64ToBytes(photo.data);
+      return new Response(bytes, {
+        status: 200,
+        headers: {
+          'Content-Type': photo.contentType,
+          'Cache-Control': 'private, max-age=86400',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
     }
 
     // --- Admin-only routes ------------------------------------------------
@@ -811,6 +1138,85 @@ export default {
         await deleteUser(env, target);
         const updatedUsers = await listUsers(env);
         return htmlResponse(adminPageHTML({ currentUser, users: updatedUsers, error: '', notice: `${target.name}'s account was removed.`, generated: null }));
+      }
+
+      // --- Event management ------------------------------------------------
+
+      if (path === '/members/admin/events' && request.method === 'GET') {
+        const events = await getEvents(env);
+        const editId = url.searchParams.get('edit');
+        const editingEvent = editId ? events.find((e) => e.id === editId) || null : null;
+        return htmlResponse(adminEventsHTML({ currentUser, events, error: '', notice: '', editingEvent }));
+      }
+
+      if (path === '/members/admin/events/add' && request.method === 'POST') {
+        const form = await request.formData();
+        const title = String(form.get('title') || '').trim();
+        const day = String(form.get('day') || '').trim();
+        const month = String(form.get('month') || '').trim().toUpperCase();
+        const location = String(form.get('location') || '').trim();
+        const events = await getEvents(env);
+        if (!title || !day || !month || !location) {
+          return htmlResponse(adminEventsHTML({ currentUser, events, error: 'Title, day, month, and location are required.', notice: '', editingEvent: null }), 400);
+        }
+        const newEvent = {
+          id: uniqueEventId(events, slugify(title)),
+          day, daySmall: form.get('day_small') === 'on', month, title, location,
+          parking: String(form.get('parking') || '').trim(),
+          floorArea: String(form.get('floor_area') || '').trim(),
+          accommodation: String(form.get('accommodation') || '').trim(),
+          fuel: String(form.get('fuel') || '').trim(),
+          baseDroids: parseBaseDroids(form.get('base_droids')),
+        };
+        events.push(newEvent);
+        await saveEvents(env, events);
+        return htmlResponse(adminEventsHTML({ currentUser, events, error: '', notice: `"${newEvent.title}" was added.`, editingEvent: null }));
+      }
+
+      if (path === '/members/admin/events/update' && request.method === 'POST') {
+        const form = await request.formData();
+        const eventId = String(form.get('event_id') || '');
+        const events = await getEvents(env);
+        const idx = events.findIndex((e) => e.id === eventId);
+        if (idx === -1) {
+          return htmlResponse(adminEventsHTML({ currentUser, events, error: 'Event not found.', notice: '', editingEvent: null }), 400);
+        }
+        const title = String(form.get('title') || '').trim();
+        const day = String(form.get('day') || '').trim();
+        const month = String(form.get('month') || '').trim().toUpperCase();
+        const location = String(form.get('location') || '').trim();
+        if (!title || !day || !month || !location) {
+          return htmlResponse(adminEventsHTML({ currentUser, events, error: 'Title, day, month, and location are required.', notice: '', editingEvent: events[idx] }), 400);
+        }
+        events[idx] = {
+          ...events[idx],
+          day, daySmall: form.get('day_small') === 'on', month, title, location,
+          parking: String(form.get('parking') || '').trim(),
+          floorArea: String(form.get('floor_area') || '').trim(),
+          accommodation: String(form.get('accommodation') || '').trim(),
+          fuel: String(form.get('fuel') || '').trim(),
+          baseDroids: parseBaseDroids(form.get('base_droids')),
+        };
+        await saveEvents(env, events);
+        return htmlResponse(adminEventsHTML({ currentUser, events, error: '', notice: `"${events[idx].title}" was updated.`, editingEvent: null }));
+      }
+
+      if (path === '/members/admin/events/delete' && request.method === 'POST') {
+        const form = await request.formData();
+        const eventId = String(form.get('event_id') || '');
+        const events = await getEvents(env);
+        const target = events.find((e) => e.id === eventId);
+        if (!target) {
+          return htmlResponse(adminEventsHTML({ currentUser, events, error: 'Event not found.', notice: '', editingEvent: null }), 400);
+        }
+        const remaining = events.filter((e) => e.id !== eventId);
+        await saveEvents(env, remaining);
+        // Clean up any RSVPs / added droids that referenced the deleted event.
+        const rsvps = await readJSON(env, 'rsvps');
+        if (eventId in rsvps) { delete rsvps[eventId]; await writeJSON(env, 'rsvps', rsvps); }
+        const droids = await readJSON(env, 'droids');
+        if (eventId in droids) { delete droids[eventId]; await writeJSON(env, 'droids', droids); }
+        return htmlResponse(adminEventsHTML({ currentUser, events: remaining, error: '', notice: `"${target.title}" was deleted.`, editingEvent: null }));
       }
 
       return htmlResponse('Not found.', 404);
