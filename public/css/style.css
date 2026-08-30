@@ -401,6 +401,7 @@ h1, h2, h3, .display {
 .event-date .day { font-family: 'Exo 2', sans-serif; font-weight: 800; font-size: 20px; color: var(--accent); }
 .event-date .day.small { font-size: 15px; }
 .event-date .month { font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.event-date .year { font-size: 10.5px; font-weight: 500; color: var(--muted); margin-top: 1px; }
 
 .event-info { flex: 1; }
 .event-info .title { font-family: 'Exo 2', sans-serif; font-weight: 700; font-size: 16px; margin-bottom: 4px; }
