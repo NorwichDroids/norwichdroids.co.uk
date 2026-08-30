@@ -32,53 +32,91 @@
 </div>
 
 <div class="container">
-  <div class="event-list">
-    <a class="event-row" href="https://feeltheforceday.com/" target="_blank" rel="noopener noreferrer">
-      <div class="event-date">
-        <div class="day">05</div>
-        <div class="month">SEP</div>
-      </div>
-      <div class="event-info">
-        <div class="title">Feel The Force Day</div>
-        <div class="loc">Peterborough Cathedral, Peterborough</div>
-      </div>
-      <div class="event-link">
-        <span>Event site</span>
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3f6b4a" stroke-width="2.2"><path d="M7 17 L17 7 M9 7 L17 7 L17 15"/></svg>
-      </div>
-    </a>
-    <a class="event-row" href="https://nor-con.co.uk/" target="_blank" rel="noopener noreferrer">
-      <div class="event-date">
-        <div class="day small">26&ndash;27</div>
-        <div class="month">SEP</div>
-      </div>
-      <div class="event-info">
-        <div class="title">Nor-Con</div>
-        <div class="loc">Norfolk Showground Arena, Norfolk</div>
-      </div>
-      <div class="event-link">
-        <span>Event site</span>
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3f6b4a" stroke-width="2.2"><path d="M7 17 L17 7 M9 7 L17 7 L17 15"/></svg>
-      </div>
-    </a>
-    <a class="event-row" href="https://100fss.com/mil-d-con/" target="_blank" rel="noopener noreferrer">
-      <div class="event-date">
-        <div class="day">03</div>
-        <div class="month">OCT</div>
-      </div>
-      <div class="event-info">
-        <div class="title">Mil-D-Con</div>
-        <div class="loc">RAF Mildenhall, Suffolk</div>
-      </div>
-      <div class="event-link">
-        <span>Event site</span>
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3f6b4a" stroke-width="2.2"><path d="M7 17 L17 7 M9 7 L17 7 L17 15"/></svg>
-      </div>
-    </a>
+  <div class="event-list" id="event-list">
+    <p class="sub">Loading events&hellip;</p>
   </div>
 </div>
 
 </main>
+
+<script>
+(function () {
+  var list = document.getElementById('event-list');
+
+  function showMessage(text) {
+    list.innerHTML = '';
+    var p = document.createElement('p');
+    p.className = 'sub';
+    p.textContent = text;
+    list.appendChild(p);
+  }
+
+  fetch('/api/events').then(function (r) {
+    if (!r.ok) throw new Error('bad response');
+    return r.json();
+  }).then(function (events) {
+    if (!Array.isArray(events) || events.length === 0) {
+      showMessage('No upcoming events right now — check back soon.');
+      return;
+    }
+    list.innerHTML = '';
+    events.forEach(function (ev) {
+      var hasLink = !!ev.url;
+      var row = document.createElement(hasLink ? 'a' : 'div');
+      row.className = 'event-row';
+      if (hasLink) {
+        row.href = ev.url;
+        row.target = '_blank';
+        row.rel = 'noopener noreferrer';
+      }
+
+      var dateDiv = document.createElement('div');
+      dateDiv.className = 'event-date';
+      var dayDiv = document.createElement('div');
+      dayDiv.className = 'day' + (ev.daySmall ? ' small' : '');
+      dayDiv.textContent = ev.day || '';
+      dateDiv.appendChild(dayDiv);
+      var monthDiv = document.createElement('div');
+      monthDiv.className = 'month';
+      monthDiv.textContent = ev.month || '';
+      dateDiv.appendChild(monthDiv);
+      if (ev.year) {
+        var yearDiv = document.createElement('div');
+        yearDiv.className = 'year';
+        yearDiv.textContent = ev.year;
+        dateDiv.appendChild(yearDiv);
+      }
+      row.appendChild(dateDiv);
+
+      var infoDiv = document.createElement('div');
+      infoDiv.className = 'event-info';
+      var titleDiv = document.createElement('div');
+      titleDiv.className = 'title';
+      titleDiv.textContent = ev.title || '';
+      infoDiv.appendChild(titleDiv);
+      var locDiv = document.createElement('div');
+      locDiv.className = 'loc';
+      locDiv.textContent = ev.location || '';
+      infoDiv.appendChild(locDiv);
+      row.appendChild(infoDiv);
+
+      if (hasLink) {
+        var linkDiv = document.createElement('div');
+        linkDiv.className = 'event-link';
+        var span = document.createElement('span');
+        span.textContent = 'More details';
+        linkDiv.appendChild(span);
+        linkDiv.insertAdjacentHTML('beforeend', '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3f6b4a" stroke-width="2.2"><path d="M7 17 L17 7 M9 7 L17 7 L17 15"/></svg>');
+        row.appendChild(linkDiv);
+      }
+
+      list.appendChild(row);
+    });
+  }).catch(function () {
+    showMessage('Events are unavailable right now.');
+  });
+})();
+</script>
 
 <div class="site-footer">
   <div class="brand">
