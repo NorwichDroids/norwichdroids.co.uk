@@ -39,8 +39,11 @@
     <div class="resource-grid">
       <div class="resource-card">
         <h4>Astromech &amp; Driving Droids</h4>
-        <p>For R2 units, BB-series builds and other driving astromechs, the best place to find files is Mr Baddeley's Facebook group.</p>
-        <a class="btn btn-outline-accent" href="https://www.facebook.com/groups/MrBaddeley/" target="_blank" rel="noopener noreferrer">Visit the Group</a>
+        <p>For R2 units, BB-series builds and other driving astromechs, the best place to find files is Mr Baddeley's Facebook group &mdash; you can also support his work directly on Patreon.</p>
+        <div class="resource-links">
+          <a class="btn btn-outline-accent" href="https://www.facebook.com/groups/MrBaddeley/" target="_blank" rel="noopener noreferrer">Visit the Group</a>
+          <a class="btn btn-outline-accent" href="https://www.patreon.com/mrbaddeley" target="_blank" rel="noopener noreferrer">Support on Patreon</a>
+        </div>
       </div>
       <div class="resource-card">
         <img class="resource-logo" src="/img/droid-division-logo.png" alt="Droid Division logo">
@@ -57,43 +60,73 @@
 
 <div class="container" style="padding-bottom:100px;">
   <h2 style="font-family:'Exo 2',sans-serif; font-weight:700; font-size:22px; margin-bottom:28px;">Meet the Members</h2>
-  <div class="member-grid">
-    <div class="card">
-      <div class="thumb">PHOTO</div>
-      <div class="body">
-        <div class="name">[Member Name]</div>
-        <div class="role">Founder &middot; R2 Unit</div>
-        <p class="bio">Started Norwich Droids after building a first R2 astromech for a local charity event — now leads build nights.</p>
-      </div>
-    </div>
-    <div class="card">
-      <div class="thumb">PHOTO</div>
-      <div class="body">
-        <div class="name">[Member Name]</div>
-        <div class="role">Committee Member &middot; BB-8</div>
-        <p class="bio">Specialises in dome mechanisms and electronics — the person to ask about magnetic drive systems.</p>
-      </div>
-    </div>
-    <div class="card">
-      <div class="thumb">PHOTO</div>
-      <div class="body">
-        <div class="name">[Member Name]</div>
-        <div class="role">Member &middot; MSE-6</div>
-        <p class="bio">Currently fabricating a mouse droid from scratch — shares progress at every build night.</p>
-      </div>
-    </div>
-    <div class="card">
-      <div class="thumb">PHOTO</div>
-      <div class="body">
-        <div class="name">[Member Name]</div>
-        <div class="role">Member &middot; Other Build</div>
-        <p class="bio">Building a background astromech of their own design, one panel at a time.</p>
-      </div>
-    </div>
+  <div class="member-grid" id="member-grid">
+    <p class="sub">Loading members&hellip;</p>
   </div>
 </div>
 
 </main>
+
+<script>
+(function () {
+  var grid = document.getElementById('member-grid');
+
+  function showMessage(text) {
+    grid.innerHTML = '';
+    var p = document.createElement('p');
+    p.className = 'sub';
+    p.textContent = text;
+    grid.appendChild(p);
+  }
+
+  fetch('/api/members').then(function (r) {
+    if (!r.ok) throw new Error('bad response');
+    return r.json();
+  }).then(function (members) {
+    if (!Array.isArray(members) || members.length === 0) {
+      showMessage('No member profiles yet — check back soon!');
+      return;
+    }
+    grid.innerHTML = '';
+    members.forEach(function (m) {
+      var card = document.createElement('div');
+      card.className = 'card';
+
+      var thumb = document.createElement('div');
+      thumb.className = 'thumb';
+      thumb.textContent = 'PHOTO';
+      card.appendChild(thumb);
+
+      var body = document.createElement('div');
+      body.className = 'body';
+
+      var name = document.createElement('div');
+      name.className = 'name';
+      name.textContent = m.name || '';
+      body.appendChild(name);
+
+      if (m.droid) {
+        var role = document.createElement('div');
+        role.className = 'role';
+        role.textContent = m.droid;
+        body.appendChild(role);
+      }
+
+      if (m.bio) {
+        var bio = document.createElement('p');
+        bio.className = 'bio';
+        bio.textContent = m.bio;
+        body.appendChild(bio);
+      }
+
+      card.appendChild(body);
+      grid.appendChild(card);
+    });
+  }).catch(function () {
+    showMessage('Member profiles are unavailable right now.');
+  });
+})();
+</script>
 
 <div class="site-footer">
   <div class="brand">

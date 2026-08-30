@@ -29,24 +29,63 @@
 <div class="page-header">
   <h1>Photo Gallery</h1>
   <p class="lede">Snapshots from build nights, conventions, and appearances across Norfolk.</p>
-  <p class="note">Placeholder tiles shown below &mdash; swap in your real photos (see README.txt).</p>
+  <p class="note">Added by members from the Members Area — log in and visit the Gallery tab to add your own.</p>
 </div>
 
 <div class="container" style="padding-bottom:100px;">
-  <div class="gallery-grid">
-    <div class="card"><div class="thumb">PHOTO</div><div class="caption">[Nor-Con appearance]</div></div>
-    <div class="card"><div class="thumb">PHOTO</div><div class="caption">[Build night — dome assembly]</div></div>
-    <div class="card"><div class="thumb">PHOTO</div><div class="caption">[Feel The Force Day stall]</div></div>
-    <div class="card"><div class="thumb">PHOTO</div><div class="caption">[R2 unit paint finishing]</div></div>
-    <div class="card"><div class="thumb">PHOTO</div><div class="caption">[BB-8 dome test]</div></div>
-    <div class="card"><div class="thumb">PHOTO</div><div class="caption">[Regional meet-up]</div></div>
-    <div class="card"><div class="thumb">PHOTO</div><div class="caption">[Convention crowd shot]</div></div>
-    <div class="card"><div class="thumb">PHOTO</div><div class="caption">[Workshop bench]</div></div>
-    <div class="card"><div class="thumb">PHOTO</div><div class="caption">[Group photo]</div></div>
+  <div class="gallery-grid" id="gallery-grid">
+    <p class="sub">Loading photos&hellip;</p>
   </div>
 </div>
 
 </main>
+
+<script>
+(function () {
+  var grid = document.getElementById('gallery-grid');
+
+  function showMessage(text) {
+    grid.innerHTML = '';
+    var p = document.createElement('p');
+    p.className = 'sub';
+    p.textContent = text;
+    grid.appendChild(p);
+  }
+
+  fetch('/api/gallery').then(function (r) {
+    if (!r.ok) throw new Error('bad response');
+    return r.json();
+  }).then(function (photos) {
+    if (!Array.isArray(photos) || photos.length === 0) {
+      showMessage('No photos yet — members can add some from the Gallery tab in the Members Area.');
+      return;
+    }
+    grid.innerHTML = '';
+    photos.forEach(function (g) {
+      var card = document.createElement('div');
+      card.className = 'card';
+
+      var thumb = document.createElement('div');
+      thumb.className = 'thumb';
+      var img = document.createElement('img');
+      img.src = '/public/gallery-photo/' + encodeURIComponent(g.id);
+      img.alt = g.caption || g.uploaderName || '';
+      img.loading = 'lazy';
+      thumb.appendChild(img);
+      card.appendChild(thumb);
+
+      var caption = document.createElement('div');
+      caption.className = 'caption';
+      caption.textContent = g.caption ? (g.caption + ' · ' + g.uploaderName) : g.uploaderName;
+      card.appendChild(caption);
+
+      grid.appendChild(card);
+    });
+  }).catch(function () {
+    showMessage('Photos are unavailable right now.');
+  });
+})();
+</script>
 
 <div class="site-footer">
   <div class="brand">
