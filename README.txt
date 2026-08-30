@@ -110,30 +110,35 @@ itself — no dashboard steps needed:
     everywhere else, so a lost or shared device can't stay logged in
     after a password change.
   - From "Admin -> Events" you can add, edit, or delete the events that
-    show up on every member's Events tab (date, location, start time,
-    access time, organiser, parking, floor area, accommodation, fuel, a
-    free-text description for anything else members should know, and the
-    droids already confirmed for it). The date is picked from a real
-    calendar widget rather than typed in — pick just a start date for a
-    single-day event, or also fill in an end date for a multi-day one.
-    Start Time, Access Time, Organiser, and the description are all
-    optional — leave any of them blank and that part just doesn't show.
-    Deleting an event also clears any RSVPs/added-droids that were logged
-    against it. This is the members-area event list (with logistics and
-    RSVP) — it's separate from the public Events page at public/events.html,
-    which still just links out to each convention's own website (see
-    section 5).
+    show up on every member's Events tab (date, event website link,
+    location, start time, access time, organiser, parking, floor area,
+    accommodation, fuel, a free-text description for anything else members
+    should know, and the droids already confirmed for it). The date is
+    picked from a real calendar widget rather than typed in — pick just a
+    start date for a single-day event, or also fill in an end date for a
+    multi-day one. Event Website, Start Time, Access Time, Organiser, and
+    the description are all optional — leave any of them blank and that
+    part just doesn't show. Deleting an event also clears any
+    RSVPs/added-droids that were logged against it.
+  - Every event added (or approved — see below) here also appears
+    automatically on the PUBLIC Events page (public/events.html) — no
+    separate step needed. The public page only ever shows the event's
+    title, date, location, and its "More Details" link (if a website was
+    given) — never the logistics fields, RSVP counts, or the confirmed
+    droid list, which stay members-only. Once an event's last day has
+    passed, it quietly drops off the public page on its own (it stays on
+    the members-area list and in the admin table either way).
   - Members aren't limited to just watching the calendar — from their own
     Events tab there's a "Suggest an Event" form where any member can
-    propose a new event (title, date, location, organiser, and a
-    description). It doesn't show up on anyone's calendar right away —
-    it lands in a "Pending Approval" queue at the top of Admin -> Events,
-    where an admin can Approve it (which adds it to the real calendar,
-    same as if an admin had typed it in directly) or Reject it (which just
-    discards the suggestion). Member-submitted events don't include the
-    admin-only logistics fields (parking, floor area, accommodation, fuel)
-    — an admin can fill those in afterwards by editing the approved event
-    if needed.
+    propose a new event (title, date, location, an optional website link,
+    organiser, and a description). It doesn't show up on anyone's calendar
+    (public or members-only) right away — it lands in a "Pending Approval"
+    queue at the top of Admin -> Events, where an admin can Approve it
+    (which adds it to the real calendar, same as if an admin had typed it
+    in directly) or Reject it (which just discards the suggestion).
+    Member-submitted events don't include the admin-only logistics fields
+    (parking, floor area, accommodation, fuel) — an admin can fill those in
+    afterwards by editing the approved event if needed.
   - Every member (not just admins) can add a profile photo from
     "My Account" — JPEG, PNG, or WEBP — which then shows next to their name
     in the Directory tab instead of their initials. Photos are only ever
@@ -204,14 +209,18 @@ functional preview of the real site.
 No admin panel — content lives directly in the source files, which is
 normal for a site this size:
 
-  - Public events page:         public/events.html (just links out to each
-                                 convention's own site — edit this file directly)
+  - Public events page:         public/events.html now loads its list of
+                                 upcoming events live from "Admin -> Events"
+                                 (no file to edit) — same list members see,
+                                 but only title/date/location/website link,
+                                 and only events that haven't happened yet
   - About page members:         public/about.html
   - Droid showcase cards:       public/index.html
   - Member events + logistics:  managed from "Admin -> Events" on the live
-                                 site now (no file to edit) — date, location,
-                                 parking, floor area, accommodation, fuel,
-                                 and confirmed droids all live there
+                                 site now (no file to edit) — date, website
+                                 link, location, organiser, parking, floor
+                                 area, accommodation, fuel, and confirmed
+                                 droids all live there
   - Droid type dropdown:        src/index.js  (the DROID_OPTIONS array)
   - Member directory:           managed from the Admin page on the live site
                                  itself now (no file to edit) — it lists
@@ -272,10 +281,13 @@ dashboard directly.
 Build log posts live under a single "buildlogs" key, and a post's optional
 photo (if it has one) lives under its own "buildlogphoto:<id>" key, same
 pattern as gallery photos — but served only to logged-in members, never
-publicly. Start time, access time, organiser, and description are just
-extra fields on each event inside the "events" key, same as the ones that
-were already there — as is the event's year, now that events are entered
-through a date picker rather than typed in by hand.
+publicly. Start time, access time, organiser, description, and the event
+website URL are just extra fields on each event inside the "events" key,
+same as the ones that were already there — as is the event's year, now
+that events are entered through a date picker rather than typed in by
+hand. The public Events page reads the same "events" key through a public
+API endpoint that only ever returns the title/date/location/URL fields —
+nothing members-only ever reaches that endpoint.
 
 Member-submitted event suggestions live under a separate "pendingEvents"
 key — entirely separate from the live "events" key, so a suggestion never
