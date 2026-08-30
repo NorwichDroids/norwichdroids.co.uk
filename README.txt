@@ -141,12 +141,16 @@ itself — no dashboard steps needed:
     afterwards by editing the approved event if needed.
   - Every member (not just admins) can add a profile photo from
     "My Account" — JPEG, PNG, or WEBP — which then shows next to their name
-    in the Directory tab instead of their initials. Photos are only ever
-    visible to other logged-in members, never the public. A photo over
-    1.5MB is automatically shrunk down to fit rather than rejected (a
-    typical phone photo is resized in a fraction of a second) — there's no
-    need to resize anything yourself before uploading. Only genuinely huge
-    files (over 8MB) or non-photo files get turned away.
+    in the Directory tab instead of their initials, AND on the PUBLIC About
+    page's "Meet the Members" section (this is a deliberate, requested
+    change — profile photos used to be members-only; now they're shown
+    publicly, same as a member's name, droid, and description already
+    were). A member who'd rather not have their photo public can just
+    remove it from "My Account" — it disappears from both places at once.
+    A photo over 1.5MB is automatically shrunk down to fit rather than
+    rejected (a typical phone photo is resized in a fraction of a second)
+    — there's no need to resize anything yourself before uploading. Only
+    genuinely huge files (over 8MB) or non-photo files get turned away.
   - Any member can post a build-log update from the Build Logs tab (droid
     + a short caption — their name is added automatically), and can
     optionally attach a photo (JPEG, PNG, or WEBP; oversized photos are
@@ -158,13 +162,15 @@ itself — no dashboard steps needed:
   - From "Admin -> Members" there's now an "Edit" button per member to fix
     a typo in their name, email, or droid without having to remove and
     re-add them.
-  - Every member can add a short "About You" description from "My Account"
-    (up to 500 characters). Once saved, it shows up on the PUBLIC About
-    page's "Meet the Members" section, alongside that member's name and
-    droid. Leaving it blank means no description is shown for that member.
-    A member with no account created yet never appears on the About page
-    at all — there are no placeholder/fake members, only real registered
-    members who exist show up, and only once they exist.
+  - Every member can add a short "About You" description, and a nickname,
+    from "My Account" (the description up to 500 characters, the nickname
+    up to 40). Once saved, both show up on the PUBLIC About page's "Meet
+    the Members" section — the nickname appears in brackets after the
+    member's name (e.g. "Jason Harris (Chewy)"), and the description
+    appears alongside their droid. Leaving either blank means that part
+    just doesn't show. A member with no account created yet never appears
+    on the About page at all — there are no placeholder/fake members, only
+    real registered members who exist show up, and only once they exist.
   - Every member can add photos from the Gallery tab (JPEG, PNG, or WEBP)
     which then show up immediately on the PUBLIC Gallery page for anyone to
     see — no login needed to view them. Same as profile photos, an
@@ -172,6 +178,15 @@ itself — no dashboard steps needed:
     From "Admin -> Gallery" any admin can remove a photo that shouldn't be
     there; members can only add, not remove (same "add vs moderate" split
     as Build Logs).
+  - Every member can add a photo of their own droid from the "Our Droids"
+    tab (droid type, an optional custom name like "R5-D3", an optional
+    caption, and a required photo — JPEG, PNG, or WEBP, auto-shrunk if
+    oversized same as everywhere else). These photos replace the old
+    generic "R2 Astromechs / BB-Series / Other Builds" placeholder cards in
+    the "Our Droids" section on the PUBLIC homepage — no login needed to
+    view them. From "Admin -> Droids" any admin can remove a photo that
+    shouldn't be there; members can only add, not remove (same pattern as
+    the Gallery and Build Logs).
 
 
 4. POINT norwichdroids.co.uk AT THIS SITE
@@ -215,7 +230,10 @@ normal for a site this size:
                                  but only title/date/location/website link,
                                  and only events that haven't happened yet
   - About page members:         public/about.html
-  - Droid showcase cards:       public/index.html
+  - Droid showcase cards:       public/index.html now loads real member
+                                 droid photos live from the "Our Droids"
+                                 tab/Admin (no file to edit) — the 3 old
+                                 placeholder cards are gone
   - Member events + logistics:  managed from "Admin -> Events" on the live
                                  site now (no file to edit) — date, website
                                  link, location, organiser, parking, floor
@@ -227,7 +245,10 @@ normal for a site this size:
                                  whoever has an account, with their photo if
                                  they've added one
   - Build log posts:            src/index.js  (the BUILD_LOGS array)
-  - Footer email/address:       every public/*.html file, near the bottom
+  - Footer email/address/social: every public/*.html file, near the bottom
+                                 (the footer-social links are the same 3
+                                 icons/URLs repeated on every page — update
+                                 all of them together if a link changes)
 
 After editing src/index.js, redeploy (push to GitHub if using option 1, or
 run `npx wrangler deploy` again if using option 2) for changes to take
@@ -240,9 +261,10 @@ details, etc.).
 
 6. REPLACING PLACEHOLDER PHOTOS
 ----------------------------------
-Droid showcase cards, gallery tiles, and member photos currently show a
+Member directory photos on the About page (public/about.html) still show a
 striped "PHOTO" placeholder (defined in public/css/style.css, the .thumb
-rule). To use real photos:
+rule) — the homepage droid showcase and the Gallery page both already show
+real member-uploaded photos. To use real photos elsewhere:
   - Add your image files into public/img/.
   - In the relevant .html file (or src/index.js for build logs), replace:
         <div class="thumb">PHOTO</div>
@@ -296,11 +318,23 @@ Admin -> Events. Approving one moves it into the "events" key (generating
 it a proper event id, same as an admin-added event); rejecting one just
 removes it from "pendingEvents" — nothing is kept.
 
-Two small pieces of the site are deliberately public with no login at
-all, because they power the public About and Gallery pages: the member
-list (name, droid, and description only — never email or anything else
-account-related) and the gallery photos. Nothing else in the members
-area is reachable without logging in.
+Droid showcase photos work the same index-plus-blob pattern as gallery
+photos: a "droidshowcaseindex" key lists every entry (who added it, the
+droid type, an optional custom name, an optional caption), and the image
+data itself lives under its own "droidshowcasephoto:<id>" key. Add and
+remove these from the Our Droids tab (members) and Admin -> Droids
+(admins) rather than the dashboard directly. A member's nickname is
+stored on their own account record, same as their bio — no separate key.
+
+A few small pieces of the site are deliberately public with no login at
+all, because they power the public homepage, About, and Gallery pages: the
+member list (name, nickname, droid, description, and profile photo only —
+never email or anything else account-related), the gallery photos, and the
+droid showcase photos. Nothing else in the members area is reachable
+without logging in. Profile photos are served at a separate public URL
+from the one the members-only Directory tab uses, so removing a photo (or
+never adding one) means it's simply never reachable at all — public or
+private.
 
 Photo resizing (both profile photos and gallery photos) uses a small
 package called "@cf-wasm/photon", listed in package.json. Cloudflare
