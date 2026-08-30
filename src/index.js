@@ -59,10 +59,14 @@ const DROID_OPTIONS = [
   'Pit Droid', 'Huyang', 'Battle Droid', 'Super Battle Droid', 'IG Unit', 'Other Build',
 ];
 
-const BUILD_LOGS = [
-  { author: '[Member Name]', droid: 'BB-8', caption: 'Dome motor finally spins smoothly — took three tries to get the magnet alignment right.' },
-  { author: '[Member Name]', droid: 'R2 Unit', caption: 'Leg struts primed and ready for paint ahead of next month’s convention.' },
-  { author: '[Member Name]', droid: 'MSE-6', caption: 'First test drive across the workshop floor — steering needs work but it moves!' },
+// Starting build-log posts — only used to seed the "buildlogs" KV key the
+// first time the site runs. After that, members add their own posts from
+// the Build Logs tab, and admins can edit or remove any post from
+// Admin > Build Logs.
+const SEED_BUILD_LOGS = [
+  { id: 'log-1', author: '[Member Name]', droid: 'BB-8', caption: 'Dome motor finally spins smoothly — took three tries to get the magnet alignment right.' },
+  { id: 'log-2', author: '[Member Name]', droid: 'R2 Unit', caption: 'Leg struts primed and ready for paint ahead of next month’s convention.' },
+  { id: 'log-3', author: '[Member Name]', droid: 'MSE-6', caption: 'First test drive across the workshop floor — steering needs work but it moves!' },
 ];
 
 // One-time bootstrap token — used only to create the very first admin
@@ -321,6 +325,24 @@ function formatBaseDroids(baseDroids) {
   return (Array.isArray(baseDroids) ? baseDroids : []).map((d) => `${d.name} | ${d.droid}`).join('\n');
 }
 
+// --- Build logs (members add, admin edits/removes) -----------------------
+
+async function getBuildLogs(env) {
+  const raw = await env.DATA.get('buildlogs');
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    } catch { /* fall through to reseed */ }
+  }
+  await env.DATA.put('buildlogs', JSON.stringify(SEED_BUILD_LOGS));
+  return SEED_BUILD_LOGS;
+}
+
+async function saveBuildLogs(env, logs) {
+  await env.DATA.put('buildlogs', JSON.stringify(logs));
+}
+
 // Session values carry the user's sessionVersion at login time, so that
 // changing a password (which bumps sessionVersion) immediately invalidates
 // every other session for that account — not just the current one.
@@ -525,8 +547,10 @@ function directoryTabHTML(users) {
       </div>`).join('')}</div>`;
 }
 
-function logsTabHTML() {
-  return `<div class="buildlog-grid">${BUILD_LOGS.map((p) => `
+function logsTabHTML(buildLogs, currentUser) {
+  const posts = buildLogs.length === 0
+    ? `<p class="sub">No build log posts yet — be the first to share progress below.</p>`
+    : `<div class="buildlog-grid">${buildLogs.map((p) => `
       <div class="buildlog-card">
         <div class="thumb">PHOTO</div>
         <div class="body">
@@ -534,6 +558,25 @@ function logsTabHTML() {
           <div class="caption">${esc(p.caption)}</div>
         </div>
       </div>`).join('')}</div>`;
+
+  return `${posts}
+    <div class="login-card" style="max-width:520px; margin:32px 0 0;">
+      <h1 style="font-size:16px; text-align:left;">Share a Build Update</h1>
+      <form method="post" action="/members/add-buildlog?tab=logs">
+        <div class="field">
+          <label for="log_droid">Droid</label>
+          <select id="log_droid" name="droid" required>
+            ${DROID_OPTIONS.map((opt) => `<option value="${esc(opt)}">${esc(opt)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label for="log_caption">What's new?</label>
+          <textarea id="log_caption" name="caption" rows="3" required placeholder="e.g. Dome motor finally spins smoothly..."></textarea>
+        </div>
+        <button type="submit" class="btn btn-primary">Post Update</button>
+      </form>
+      <p style="font-size:12px; color:var(--muted); margin:12px 0 0;">Posts as ${esc(currentUser.name)}. An admin can edit or remove posts from Admin &gt; Build Logs.</p>
+    </div>`;
 }
 
 function dashNav(active, currentUser) {
@@ -552,10 +595,10 @@ function dashNav(active, currentUser) {
 </div>`;
 }
 
-function dashboardHTML({ tab, openEventId, events, rsvps, addedDroids, users, currentUser }) {
+function dashboardHTML({ tab, openEventId, events, rsvps, addedDroids, users, buildLogs, currentUser }) {
   const content = tab === 'events' ? eventsTabHTML(events, rsvps, addedDroids, openEventId)
     : tab === 'directory' ? directoryTabHTML(users)
-    : logsTabHTML();
+    : logsTabHTML(buildLogs, currentUser);
 
   return `<!doctype html>
 <html lang="en"><head>${HEAD}<title>Members Dashboard — Norwich Droids</title></head>
@@ -626,10 +669,11 @@ function adminSubNav(active) {
   <div class="admin-subnav">
     <a href="/members/admin" class="${active === 'members' ? 'active' : ''}">Members</a>
     <a href="/members/admin/events" class="${active === 'events' ? 'active' : ''}">Events</a>
+    <a href="/members/admin/logs" class="${active === 'logs' ? 'active' : ''}">Build Logs</a>
   </div>`;
 }
 
-function adminPageHTML({ currentUser, users, error, notice, generated }) {
+function adminPageHTML({ currentUser, users, error, notice, generated, editingUser = null }) {
   const rows = users.map((u) => `
     <tr>
       <td>${esc(u.name)}</td>
@@ -637,6 +681,7 @@ function adminPageHTML({ currentUser, users, error, notice, generated }) {
       <td>${esc(u.droid || '—')}</td>
       <td>${u.role === 'admin' ? '<span class="role-badge">Admin</span>' : 'Member'}</td>
       <td class="admin-actions">
+        <a class="btn-small" href="/members/admin?edit=${encodeURIComponent(u.id)}">Edit</a>
         <form method="post" action="/members/admin/set-role">
           <input type="hidden" name="user_id" value="${esc(u.id)}">
           <input type="hidden" name="role" value="${u.role === 'admin' ? 'member' : 'admin'}">
@@ -671,21 +716,23 @@ ${dashNav('admin', currentUser)}
     </div>` : ''}
 
   <div class="login-card" style="max-width:520px; margin:0 0 40px;">
-    <h1 style="font-size:16px; text-align:left;">Add a Member</h1>
-    <form method="post" action="/members/admin/add">
+    <h1 style="font-size:16px; text-align:left;">${editingUser ? `Edit ${esc(editingUser.name)}` : 'Add a Member'}</h1>
+    <form method="post" action="${editingUser ? '/members/admin/update' : '/members/admin/add'}">
+      ${editingUser ? `<input type="hidden" name="user_id" value="${esc(editingUser.id)}">` : ''}
       <div class="field">
         <label for="new_name">Name</label>
-        <input type="text" id="new_name" name="name" required>
+        <input type="text" id="new_name" name="name" value="${esc(editingUser ? editingUser.name : '')}" required>
       </div>
       <div class="field">
         <label for="new_email">Email</label>
-        <input type="email" id="new_email" name="email" required>
+        <input type="email" id="new_email" name="email" value="${esc(editingUser ? editingUser.email : '')}" required>
       </div>
       <div class="field">
         <label for="new_droid">Droid (optional)</label>
-        <input type="text" id="new_droid" name="droid" placeholder="e.g. R2 Unit">
+        <input type="text" id="new_droid" name="droid" placeholder="e.g. R2 Unit" value="${esc(editingUser ? (editingUser.droid || '') : '')}">
       </div>
-      <button type="submit" class="btn btn-primary">Add Member</button>
+      <button type="submit" class="btn btn-primary">${editingUser ? 'Save Changes' : 'Add Member'}</button>
+      ${editingUser ? `<a href="/members/admin" class="btn-small" style="margin-left:10px;">Cancel</a>` : ''}
     </form>
   </div>
 
@@ -815,6 +862,77 @@ document.querySelectorAll('form[action="/members/admin/events/delete"]').forEach
 </body></html>`;
 }
 
+function adminBuildLogsHTML({ currentUser, buildLogs, error, notice, editingLog }) {
+  const rows = buildLogs.map((p) => `
+    <tr>
+      <td>${esc(p.author)}</td>
+      <td>${esc(p.droid)}</td>
+      <td style="white-space:normal; max-width:360px;">${esc(p.caption)}</td>
+      <td class="admin-actions">
+        <a class="btn-small" href="/members/admin/logs?edit=${encodeURIComponent(p.id)}">Edit</a>
+        <form method="post" action="/members/admin/logs/delete" onsubmit="return false;" data-log="${esc(p.author)}">
+          <input type="hidden" name="log_id" value="${esc(p.id)}">
+          <button type="submit" class="btn-small btn-danger">Delete</button>
+        </form>
+      </td>
+    </tr>`).join('');
+
+  return `<!doctype html>
+<html lang="en"><head>${HEAD}<title>Admin · Build Logs — Norwich Droids</title></head>
+<body>
+${dashNav('admin', currentUser)}
+<div class="dash-main">
+  <h1>Admin</h1>
+  <p class="sub">Edit or remove build log posts. Members add their own from the Build Logs tab.</p>
+  ${adminSubNav('logs')}
+
+  ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
+  ${notice ? `<div class="admin-success">${esc(notice)}</div>` : ''}
+
+  ${editingLog ? `
+  <div class="login-card" style="max-width:520px; margin:0 0 40px;">
+    <h1 style="font-size:16px; text-align:left;">Edit Post</h1>
+    <form method="post" action="/members/admin/logs/update">
+      <input type="hidden" name="log_id" value="${esc(editingLog.id)}">
+      <div class="field">
+        <label for="log_author">Author</label>
+        <input type="text" id="log_author" name="author" value="${esc(editingLog.author)}" required>
+      </div>
+      <div class="field">
+        <label for="log_droid_edit">Droid</label>
+        <select id="log_droid_edit" name="droid" required>
+          ${DROID_OPTIONS.map((opt) => `<option value="${esc(opt)}" ${editingLog.droid === opt ? 'selected' : ''}>${esc(opt)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field">
+        <label for="log_caption_edit">Caption</label>
+        <textarea id="log_caption_edit" name="caption" rows="3" required>${esc(editingLog.caption)}</textarea>
+      </div>
+      <button type="submit" class="btn btn-primary">Save Changes</button>
+      <a href="/members/admin/logs" class="btn-small" style="margin-left:10px;">Cancel</a>
+    </form>
+  </div>` : ''}
+
+  <div class="admin-table-wrap">
+    <table class="admin-table">
+      <thead><tr><th>Author</th><th>Droid</th><th>Caption</th><th>Actions</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="4">No build log posts yet.</td></tr>`}</tbody>
+    </table>
+  </div>
+</div>
+<script>
+document.querySelectorAll('form[action="/members/admin/logs/delete"]').forEach((f) => {
+  f.addEventListener('submit', () => {
+    if (confirm('Delete this post by ' + f.dataset.log + '? This cannot be undone.')) {
+      f.removeAttribute('onsubmit');
+      HTMLFormElement.prototype.submit.call(f);
+    }
+  });
+});
+</script>
+</body></html>`;
+}
+
 function setupPageHTML(error) {
   return `<!doctype html>
 <html lang="en"><head>${HEAD}<title>First-time Setup — Norwich Droids</title></head>
@@ -917,13 +1035,14 @@ export default {
     if (path === '/members/dashboard') {
       const currentUser = await getSessionUser(request, env);
       if (!currentUser) return redirect('/members/login');
+      const tab = pickTab(url);
       const events = await getEvents(env);
       const rsvps = await readJSON(env, 'rsvps');
       const addedDroids = await readJSON(env, 'droids');
-      const tab = pickTab(url);
       const users = tab === 'directory' ? await listUsers(env) : [];
+      const buildLogs = tab === 'logs' ? await getBuildLogs(env) : [];
       return htmlResponse(dashboardHTML({
-        tab, openEventId: url.searchParams.get('open') || '', events, rsvps, addedDroids, users, currentUser,
+        tab, openEventId: url.searchParams.get('open') || '', events, rsvps, addedDroids, users, buildLogs, currentUser,
       }));
     }
 
@@ -960,6 +1079,20 @@ export default {
         await writeJSON(env, 'droids', droids);
       }
       return redirect(`/members/dashboard?tab=${pickTab(url)}&open=${encodeURIComponent(eventId)}`);
+    }
+
+    if (path === '/members/add-buildlog' && request.method === 'POST') {
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+      const form = await request.formData();
+      const droid = String(form.get('droid') || '').trim();
+      const caption = String(form.get('caption') || '').trim();
+      if (droid !== '' && caption !== '') {
+        const buildLogs = await getBuildLogs(env);
+        buildLogs.push({ id: crypto.randomUUID(), author: currentUser.name, droid, caption });
+        await saveBuildLogs(env, buildLogs);
+      }
+      return redirect('/members/dashboard?tab=logs');
     }
 
     if (path === '/members/change-password') {
@@ -1053,7 +1186,44 @@ export default {
 
       if (path === '/members/admin' && request.method === 'GET') {
         const users = await listUsers(env);
-        return htmlResponse(adminPageHTML({ currentUser, users, error: '', notice: '', generated: null }));
+        const editId = url.searchParams.get('edit');
+        const editingUser = editId ? users.find((u) => u.id === editId) || null : null;
+        return htmlResponse(adminPageHTML({ currentUser, users, error: '', notice: '', generated: null, editingUser }));
+      }
+
+      if (path === '/members/admin/update' && request.method === 'POST') {
+        const form = await request.formData();
+        const userId = String(form.get('user_id') || '');
+        const target = await getUserById(env, userId);
+        const users = await listUsers(env);
+        if (!target) {
+          return htmlResponse(adminPageHTML({ currentUser, users, error: 'Member not found.', notice: '', generated: null }), 400);
+        }
+        const name = String(form.get('name') || '').trim();
+        const email = String(form.get('email') || '').trim().toLowerCase();
+        const droid = String(form.get('droid') || '').trim();
+        if (!name || !email) {
+          return htmlResponse(adminPageHTML({ currentUser, users, error: 'Name and email are required.', notice: '', generated: null, editingUser: target }), 400);
+        }
+        const oldEmail = target.email.toLowerCase();
+        if (email !== oldEmail) {
+          const existing = await getUserByEmail(env, email);
+          if (existing && existing.id !== target.id) {
+            return htmlResponse(adminPageHTML({ currentUser, users, error: 'Another member already uses that email.', notice: '', generated: null, editingUser: target }), 400);
+          }
+        }
+        target.name = name;
+        target.email = email;
+        target.droid = droid;
+        // Write the user record + new email mapping FIRST, then drop the old
+        // mapping last — if anything fails partway, the account stays
+        // reachable under one email or the other rather than neither.
+        await saveUser(env, target);
+        if (email !== oldEmail) {
+          await env.DATA.delete(`email:${oldEmail}`);
+        }
+        const updatedUsers = await listUsers(env);
+        return htmlResponse(adminPageHTML({ currentUser, users: updatedUsers, error: '', notice: `${target.name}'s details were updated.`, generated: null }));
       }
 
       if (path === '/members/admin/add' && request.method === 'POST') {
@@ -1217,6 +1387,47 @@ export default {
         const droids = await readJSON(env, 'droids');
         if (eventId in droids) { delete droids[eventId]; await writeJSON(env, 'droids', droids); }
         return htmlResponse(adminEventsHTML({ currentUser, events: remaining, error: '', notice: `"${target.title}" was deleted.`, editingEvent: null }));
+      }
+
+      // --- Build log management ---------------------------------------------
+
+      if (path === '/members/admin/logs' && request.method === 'GET') {
+        const buildLogs = await getBuildLogs(env);
+        const editId = url.searchParams.get('edit');
+        const editingLog = editId ? buildLogs.find((p) => p.id === editId) || null : null;
+        return htmlResponse(adminBuildLogsHTML({ currentUser, buildLogs, error: '', notice: '', editingLog }));
+      }
+
+      if (path === '/members/admin/logs/update' && request.method === 'POST') {
+        const form = await request.formData();
+        const logId = String(form.get('log_id') || '');
+        const buildLogs = await getBuildLogs(env);
+        const idx = buildLogs.findIndex((p) => p.id === logId);
+        if (idx === -1) {
+          return htmlResponse(adminBuildLogsHTML({ currentUser, buildLogs, error: 'Post not found.', notice: '', editingLog: null }), 400);
+        }
+        const author = String(form.get('author') || '').trim();
+        const droid = String(form.get('droid') || '').trim();
+        const caption = String(form.get('caption') || '').trim();
+        if (!author || !droid || !caption) {
+          return htmlResponse(adminBuildLogsHTML({ currentUser, buildLogs, error: 'Author, droid, and caption are all required.', notice: '', editingLog: buildLogs[idx] }), 400);
+        }
+        buildLogs[idx] = { ...buildLogs[idx], author, droid, caption };
+        await saveBuildLogs(env, buildLogs);
+        return htmlResponse(adminBuildLogsHTML({ currentUser, buildLogs, error: '', notice: 'Post updated.', editingLog: null }));
+      }
+
+      if (path === '/members/admin/logs/delete' && request.method === 'POST') {
+        const form = await request.formData();
+        const logId = String(form.get('log_id') || '');
+        const buildLogs = await getBuildLogs(env);
+        const target = buildLogs.find((p) => p.id === logId);
+        if (!target) {
+          return htmlResponse(adminBuildLogsHTML({ currentUser, buildLogs, error: 'Post not found.', notice: '', editingLog: null }), 400);
+        }
+        const remaining = buildLogs.filter((p) => p.id !== logId);
+        await saveBuildLogs(env, remaining);
+        return htmlResponse(adminBuildLogsHTML({ currentUser, buildLogs: remaining, error: '', notice: 'Post deleted.', editingLog: null }));
       }
 
       return htmlResponse('Not found.', 404);
