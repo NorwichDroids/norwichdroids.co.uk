@@ -16,6 +16,7 @@ const SEED_EVENTS = [
   {
     id: 'charity', day: '05', daySmall: false, month: 'SEP', year: '2026',
     title: 'Feel The Force Day — Team Meet Point', location: 'Peterborough Cathedral, Peterborough',
+    url: 'https://feeltheforceday.com/',
     startTime: '[Start time TBC]',
     accessTime: '[Access time TBC]',
     organiser: '[Organiser TBC]',
@@ -33,6 +34,7 @@ const SEED_EVENTS = [
   {
     id: 'conv', day: '26–27', daySmall: true, month: 'SEP', year: '2026',
     title: 'Nor-Con — Team Meet Point', location: 'Norfolk Showground Arena, Norfolk',
+    url: 'https://nor-con.co.uk/',
     startTime: '[Start time TBC]',
     accessTime: '[Access time TBC]',
     organiser: '[Organiser TBC]',
@@ -50,6 +52,7 @@ const SEED_EVENTS = [
   {
     id: 'mildcon', day: '03', daySmall: false, month: 'OCT', year: '2026',
     title: 'Mil-D-Con — Team Meet Point', location: 'RAF Mildenhall, Suffolk',
+    url: 'https://100fss.com/mil-d-con/',
     startTime: '[Start time TBC]',
     accessTime: '[Access time TBC]',
     organiser: '[Organiser TBC]',
@@ -111,6 +114,22 @@ function esc(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[c]));
+}
+
+// Only http(s) links are ever stored/rendered as an event's "more details"
+// URL — this is rendered as a real href on the PUBLIC site with no login,
+// so a javascript:, data:, or other unexpected scheme is rejected outright
+// rather than trusted just because it parses as a URL.
+function sanitizeEventUrl(raw) {
+  const trimmed = String(raw || '').trim();
+  if (!trimmed) return '';
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+    return parsed.href;
+  } catch {
+    return '';
+  }
 }
 
 function initials(name) {
@@ -512,6 +531,31 @@ function computeEventDateFields(form) {
   return { year: start.year, month: start.month, day: start.day, daySmall: false };
 }
 
+// Used to decide which events are still worth showing on the public Events
+// page — a multi-day event (day stored as "26–27") stays listed until its
+// LAST day has passed, not its first. If an event's date can't be resolved
+// to a real ISO date at all (typically an older event saved before the year
+// field existed), it's treated as still upcoming rather than silently
+// dropped — better to show a stale-looking event than to hide a real one.
+function eventIsUpcoming(e, todayIso) {
+  const dayStr = String(e.day || '');
+  const rangeMatch = dayStr.match(/^(\d+)\s*[–-]\s*(\d+)$/);
+  const lastDay = rangeMatch ? rangeMatch[2] : dayStr;
+  const iso = dayMonthYearToIso(lastDay, e.month, e.year);
+  if (!iso) return true;
+  return iso >= todayIso;
+}
+
+// Sort key for the public events list — the FIRST day of the event, so
+// multi-day events sort by when they start. Unresolvable dates sort last
+// (after everything with a real date) rather than jumping to the front.
+function eventSortIso(e) {
+  const dayStr = String(e.day || '');
+  const rangeMatch = dayStr.match(/^(\d+)\s*[–-]\s*(\d+)$/);
+  const firstDay = rangeMatch ? rangeMatch[1] : dayStr;
+  return dayMonthYearToIso(firstDay, e.month, e.year) || '9999-99-99';
+}
+
 function slugify(str) {
   return String(str).toLowerCase().trim()
     .replace(/[^a-z0-9]+/g, '-')
@@ -751,6 +795,9 @@ function eventsTabHTML(events, rsvps, addedDroids, openEventId, error, notice) {
               <div><div class="label">Fuel</div><div class="value">${esc(ev.fuel)}</div></div>
             </div>
 
+            ${ev.url ? `
+            <p style="margin:0 0 18px;"><a href="${esc(ev.url)}" target="_blank" rel="noopener noreferrer" class="btn-small">Event Website &rarr;</a></p>` : ''}
+
             ${ev.description ? `
             <div class="event-description">
               <div class="droid-list-label">Description &amp; Other Info</div>
@@ -806,6 +853,10 @@ function eventsTabHTML(events, rsvps, addedDroids, openEventId, error, notice) {
             <div class="field">
               <label for="sub_location">Location</label>
               <input type="text" id="sub_location" name="location" required>
+            </div>
+            <div class="field">
+              <label for="sub_url">Event Website <span style="font-weight:400;">(optional)</span></label>
+              <input type="url" id="sub_url" name="url" placeholder="https://example.com/the-event">
             </div>
             <div class="field">
               <label for="sub_organiser">Organiser</label>
@@ -1112,7 +1163,7 @@ document.querySelectorAll('form[action="/members/admin/delete"]').forEach((f) =>
 
 function eventFormFields(ev) {
   const e = ev || {
-    id: '', day: '', daySmall: false, month: '', year: '', title: '', location: '',
+    id: '', day: '', daySmall: false, month: '', year: '', title: '', location: '', url: '',
     startTime: '', accessTime: '', organiser: '', parking: '', floorArea: '', accommodation: '', fuel: '', description: '', baseDroids: [],
   };
   const dateValues = eventDateInputValues(e);
@@ -1134,6 +1185,10 @@ function eventFormFields(ev) {
       <div class="field">
         <label for="ev_location">Location</label>
         <input type="text" id="ev_location" name="location" value="${esc(e.location)}" required>
+      </div>
+      <div class="field">
+        <label for="ev_url">Event Website <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — shown as a "More Details" link on the public Events page)</span></label>
+        <input type="url" id="ev_url" name="url" value="${esc(e.url || '')}" placeholder="https://example.com/the-event">
       </div>
       <div class="field-row">
         <div class="field">
@@ -1444,6 +1499,27 @@ export default {
       });
     }
 
+    // Public, no login required — only the fields a visitor needs to see an
+    // event listing (never the logistics/RSVP/droid-list fields, which stay
+    // members-only). Past events drop off automatically once their last day
+    // has gone by; anything with a date that can't be resolved is kept
+    // rather than risk hiding a real event.
+    if (path === '/api/events' && request.method === 'GET') {
+      const events = await getEvents(env);
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const publicEvents = events
+        .filter((e) => eventIsUpcoming(e, todayIso))
+        .sort((a, b) => (eventSortIso(a) < eventSortIso(b) ? -1 : eventSortIso(a) > eventSortIso(b) ? 1 : 0))
+        .map((e) => ({
+          day: e.day, daySmall: !!e.daySmall, month: e.month, year: e.year || '',
+          title: e.title, location: e.location, url: e.url || '',
+        }));
+      return new Response(JSON.stringify(publicEvents), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
+      });
+    }
+
     if (path.startsWith('/public/gallery-photo/') && request.method === 'GET') {
       const id = path.slice('/public/gallery-photo/'.length);
       const photo = await getGalleryPhotoBlob(env, id);
@@ -1710,7 +1786,7 @@ export default {
         submittedBy: currentUser.name,
         submittedAt: new Date().toISOString(),
         day: dateFields.day, daySmall: dateFields.daySmall, month: dateFields.month, year: dateFields.year,
-        title, location,
+        title, location, url: sanitizeEventUrl(form.get('url')),
         organiser: String(form.get('organiser') || '').trim(),
         description: String(form.get('description') || '').trim(),
       });
@@ -1992,6 +2068,7 @@ export default {
         const newEvent = {
           id: uniqueEventId(events, slugify(title)),
           day: dateFields.day, daySmall: dateFields.daySmall, month: dateFields.month, year: dateFields.year, title, location,
+          url: sanitizeEventUrl(form.get('url')),
           startTime: String(form.get('start_time') || '').trim(),
           accessTime: String(form.get('access_time') || '').trim(),
           organiser: String(form.get('organiser') || '').trim(),
@@ -2025,6 +2102,7 @@ export default {
         events[idx] = {
           ...events[idx],
           day: dateFields.day, daySmall: dateFields.daySmall, month: dateFields.month, year: dateFields.year, title, location,
+          url: sanitizeEventUrl(form.get('url')),
           startTime: String(form.get('start_time') || '').trim(),
           accessTime: String(form.get('access_time') || '').trim(),
           organiser: String(form.get('organiser') || '').trim(),
@@ -2070,7 +2148,7 @@ export default {
         const newEvent = {
           id: uniqueEventId(events, slugify(target.title)),
           day: target.day, daySmall: target.daySmall, month: target.month, year: target.year,
-          title: target.title, location: target.location,
+          title: target.title, location: target.location, url: target.url || '',
           startTime: target.startTime || '', accessTime: target.accessTime || '', organiser: target.organiser || '',
           parking: '', floorArea: '', accommodation: '', fuel: '',
           description: target.description || '', baseDroids: [],
