@@ -109,6 +109,43 @@ itself — no dashboard steps needed:
   - Changing or resetting a password immediately signs that person out
     everywhere else, so a lost or shared device can't stay logged in
     after a password change.
+  - From "Admin -> Events" you can add, edit, or delete the events that
+    show up on every member's Events tab (date, location, parking, floor
+    area, accommodation, fuel, and the droids already confirmed for it).
+    Deleting an event also clears any RSVPs/added-droids that were logged
+    against it. This is the members-area event list (with logistics and
+    RSVP) — it's separate from the public Events page at public/events.html,
+    which still just links out to each convention's own website (see
+    section 5).
+  - Every member (not just admins) can add a profile photo from
+    "My Account" — JPEG, PNG, or WEBP — which then shows next to their name
+    in the Directory tab instead of their initials. Photos are only ever
+    visible to other logged-in members, never the public. A photo over
+    1.5MB is automatically shrunk down to fit rather than rejected (a
+    typical phone photo is resized in a fraction of a second) — there's no
+    need to resize anything yourself before uploading. Only genuinely huge
+    files (over 8MB) or non-photo files get turned away.
+  - Any member can post a build-log update from the Build Logs tab (droid
+    + a short caption — their name is added automatically). From
+    "Admin -> Build Logs" you can edit or delete any post, in case
+    something needs correcting or removing.
+  - From "Admin -> Members" there's now an "Edit" button per member to fix
+    a typo in their name, email, or droid without having to remove and
+    re-add them.
+  - Every member can add a short "About You" description from "My Account"
+    (up to 500 characters). Once saved, it shows up on the PUBLIC About
+    page's "Meet the Members" section, alongside that member's name and
+    droid. Leaving it blank means no description is shown for that member.
+    A member with no account created yet never appears on the About page
+    at all — there are no placeholder/fake members, only real registered
+    members who exist show up, and only once they exist.
+  - Every member can add photos from the Gallery tab (JPEG, PNG, or WEBP)
+    which then show up immediately on the PUBLIC Gallery page for anyone to
+    see — no login needed to view them. Same as profile photos, an
+    oversized photo is automatically shrunk to fit rather than rejected.
+    From "Admin -> Gallery" any admin can remove a photo that shouldn't be
+    there; members can only add, not remove (same "add vs moderate" split
+    as Build Logs).
 
 
 4. POINT norwichdroids.co.uk AT THIS SITE
@@ -146,14 +183,19 @@ functional preview of the real site.
 No admin panel — content lives directly in the source files, which is
 normal for a site this size:
 
-  - Public events:              public/events.html
+  - Public events page:         public/events.html (just links out to each
+                                 convention's own site — edit this file directly)
   - About page members:         public/about.html
   - Droid showcase cards:       public/index.html
-  - Member events + logistics:  src/index.js  (the EVENTS array near the top)
+  - Member events + logistics:  managed from "Admin -> Events" on the live
+                                 site now (no file to edit) — date, location,
+                                 parking, floor area, accommodation, fuel,
+                                 and confirmed droids all live there
   - Droid type dropdown:        src/index.js  (the DROID_OPTIONS array)
   - Member directory:           managed from the Admin page on the live site
                                  itself now (no file to edit) — it lists
-                                 whoever has an account
+                                 whoever has an account, with their photo if
+                                 they've added one
   - Build log posts:            src/index.js  (the BUILD_LOGS array)
   - Footer email/address:       every public/*.html file, near the bottom
 
@@ -192,6 +234,33 @@ and passwords are never stored in plain text — only a salted, hashed form
 that can't be reversed. There's normally no need to touch these directly;
 use the Admin page on the site itself to add, promote, demote, reset, or
 remove members instead.
+
+The member-area event list lives under a single "events" key, and profile
+photos live under "photo:<id>" keys (stored as the image data itself, not
+a link to anywhere else) — again, no need to touch either directly; use
+"Admin -> Events" and each member's own "My Account" page instead.
+
+Each member's "About You" description is stored on their own account
+record, same as their name and droid — no separate key. Gallery photos
+work the same way as profile photos: a small "galleryindex" key lists
+every photo (who added it, its caption), and the image data itself lives
+under its own "galleryphoto:<id>" key. Add and remove these from the
+Gallery tab (members) and Admin -> Gallery (admins) rather than the
+dashboard directly.
+
+Two small pieces of the site are deliberately public with no login at
+all, because they power the public About and Gallery pages: the member
+list (name, droid, and description only — never email or anything else
+account-related) and the gallery photos. Nothing else in the members
+area is reachable without logging in.
+
+Photo resizing (both profile photos and gallery photos) uses a small
+package called "@cf-wasm/photon", listed in package.json. Cloudflare
+installs it automatically as part of every deploy — there's nothing you
+need to do. If that package were ever somehow unavailable, the site
+doesn't break: uploads just go back to being rejected with a "please use
+one under 1.5MB" message instead of being resized, exactly like before
+this feature existed.
 
 
 QUESTIONS
