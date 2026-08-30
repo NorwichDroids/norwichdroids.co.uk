@@ -76,7 +76,7 @@ const SEED_BUILD_LOGS = [
 // club's first admin has been created.
 const SETUP_TOKEN = '9856825dfffddf49fc0139a57840850be646264818193ba5';
 
-const TABS = ['events', 'directory', 'logs'];
+const TABS = ['events', 'directory', 'logs', 'gallery'];
 const SESSION_COOKIE = 'nd_session';
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 const PBKDF2_ITERATIONS = 100000;
@@ -264,6 +264,42 @@ async function getPhoto(env, userId) {
 
 async function deletePhoto(env, userId) {
   await env.DATA.delete(`photo:${userId}`);
+}
+
+// --- Public gallery -------------------------------------------------------
+// Metadata (id/uploader/caption/date) lives in one small "galleryindex" list
+// for fast listing; each photo's actual bytes live in their own
+// "galleryphoto:<id>" key, same split as profile photos above. Unlike
+// profile photos, these are served without requiring a session — the
+// public Gallery page reads them directly.
+
+async function getGalleryIndex(env) {
+  const raw = await env.DATA.get('galleryindex');
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveGalleryIndex(env, items) {
+  await env.DATA.put('galleryindex', JSON.stringify(items));
+}
+
+async function saveGalleryPhotoBlob(env, id, contentType, base64Data) {
+  await env.DATA.put(`galleryphoto:${id}`, JSON.stringify({ contentType, data: base64Data }));
+}
+
+async function getGalleryPhotoBlob(env, id) {
+  const raw = await env.DATA.get(`galleryphoto:${id}`);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+async function deleteGalleryPhotoBlob(env, id) {
+  await env.DATA.delete(`galleryphoto:${id}`);
 }
 
 // --- Events (admin-editable) --------------------------------------------
@@ -549,7 +585,7 @@ function directoryTabHTML(users) {
 
 function logsTabHTML(buildLogs, currentUser) {
   const posts = buildLogs.length === 0
-    ? `<p class="sub">No build log posts yet — be the first to share progress below.</p>`
+    ? `<p class="sub">No build log posts yet — be the first to share progress with the form on the right.</p>`
     : `<div class="buildlog-grid">${buildLogs.map((p) => `
       <div class="buildlog-card">
         <div class="thumb">PHOTO</div>
@@ -559,23 +595,62 @@ function logsTabHTML(buildLogs, currentUser) {
         </div>
       </div>`).join('')}</div>`;
 
-  return `${posts}
-    <div class="login-card" style="max-width:520px; margin:32px 0 0;">
-      <h1 style="font-size:16px; text-align:left;">Share a Build Update</h1>
-      <form method="post" action="/members/add-buildlog?tab=logs">
-        <div class="field">
-          <label for="log_droid">Droid</label>
-          <select id="log_droid" name="droid" required>
-            ${DROID_OPTIONS.map((opt) => `<option value="${esc(opt)}">${esc(opt)}</option>`).join('')}
-          </select>
+  return `
+    <div class="split-layout">
+      <div class="split-main">${posts}</div>
+      <aside class="split-sidebar">
+        <div class="login-card" style="max-width:none; margin:0;">
+          <h1 style="font-size:16px; text-align:left;">Share a Build Update</h1>
+          <form method="post" action="/members/add-buildlog?tab=logs">
+            <div class="field">
+              <label for="log_droid">Droid</label>
+              <select id="log_droid" name="droid" required>
+                ${DROID_OPTIONS.map((opt) => `<option value="${esc(opt)}">${esc(opt)}</option>`).join('')}
+              </select>
+            </div>
+            <div class="field">
+              <label for="log_caption">What's new?</label>
+              <textarea id="log_caption" name="caption" rows="3" required placeholder="e.g. Dome motor finally spins smoothly..."></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary">Post Update</button>
+          </form>
+          <p style="font-size:12px; color:var(--muted); margin:12px 0 0;">Posts as ${esc(currentUser.name)}. An admin can edit or remove posts from Admin &gt; Build Logs.</p>
         </div>
-        <div class="field">
-          <label for="log_caption">What's new?</label>
-          <textarea id="log_caption" name="caption" rows="3" required placeholder="e.g. Dome motor finally spins smoothly..."></textarea>
+      </aside>
+    </div>`;
+}
+
+function galleryTabHTML(galleryItems, currentUser, error, notice) {
+  const photos = galleryItems.length === 0
+    ? `<p class="sub">No photos yet — be the first to share one with the form on the right.</p>`
+    : `<div class="gallery-grid">${galleryItems.map((g) => `
+      <div class="card">
+        <div class="thumb"><img src="/public/gallery-photo/${esc(g.id)}" alt="${esc(g.caption || g.uploaderName)}"></div>
+        <div class="caption">${g.caption ? `${esc(g.caption)} &middot; ` : ''}${esc(g.uploaderName)}</div>
+      </div>`).join('')}</div>`;
+
+  return `
+    <div class="split-layout">
+      <div class="split-main">${photos}</div>
+      <aside class="split-sidebar">
+        <div class="login-card" style="max-width:none; margin:0;">
+          <h1 style="font-size:16px; text-align:left;">Add a Photo</h1>
+          ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
+          ${notice ? `<div class="admin-success">${esc(notice)}</div>` : ''}
+          <form method="post" action="/members/gallery/upload" enctype="multipart/form-data">
+            <div class="field">
+              <label for="gallery_photo">Photo</label>
+              <input type="file" id="gallery_photo" name="photo" accept="image/jpeg,image/png,image/webp" required>
+            </div>
+            <div class="field">
+              <label for="gallery_caption">Caption (optional)</label>
+              <input type="text" id="gallery_caption" name="caption" maxlength="140" placeholder="e.g. Nor-Con 2026 stall">
+            </div>
+            <button type="submit" class="btn btn-primary">Upload Photo</button>
+          </form>
+          <p style="font-size:12px; color:var(--muted); margin:12px 0 0;">JPEG, PNG or WEBP, up to 1.5MB. Shown on the public Gallery page for everyone to see. An admin can remove photos from Admin &gt; Gallery.</p>
         </div>
-        <button type="submit" class="btn btn-primary">Post Update</button>
-      </form>
-      <p style="font-size:12px; color:var(--muted); margin:12px 0 0;">Posts as ${esc(currentUser.name)}. An admin can edit or remove posts from Admin &gt; Build Logs.</p>
+      </aside>
     </div>`;
 }
 
@@ -587,6 +662,7 @@ function dashNav(active, currentUser) {
     <a href="/members/dashboard?tab=events" class="${active === 'events' ? 'active' : ''}">Events</a>
     <a href="/members/dashboard?tab=directory" class="${active === 'directory' ? 'active' : ''}">Directory</a>
     <a href="/members/dashboard?tab=logs" class="${active === 'logs' ? 'active' : ''}">Build Logs</a>
+    <a href="/members/dashboard?tab=gallery" class="${active === 'gallery' ? 'active' : ''}">Gallery</a>
     ${currentUser.role === 'admin' ? `<a href="/members/admin" class="${active === 'admin' ? 'active' : ''}">Admin</a>` : ''}
     <a href="/members/change-password" class="${active === 'change-password' ? 'active' : ''}">My Account</a>
     <a class="view-public" href="/">View public site</a>
@@ -595,9 +671,10 @@ function dashNav(active, currentUser) {
 </div>`;
 }
 
-function dashboardHTML({ tab, openEventId, events, rsvps, addedDroids, users, buildLogs, currentUser }) {
+function dashboardHTML({ tab, openEventId, events, rsvps, addedDroids, users, buildLogs, galleryItems, galleryError, galleryNotice, currentUser }) {
   const content = tab === 'events' ? eventsTabHTML(events, rsvps, addedDroids, openEventId)
     : tab === 'directory' ? directoryTabHTML(users)
+    : tab === 'gallery' ? galleryTabHTML(galleryItems, currentUser, galleryError, galleryNotice)
     : logsTabHTML(buildLogs, currentUser);
 
   return `<!doctype html>
@@ -613,7 +690,7 @@ ${dashNav(tab, currentUser)}
 }
 
 function changePasswordHTML(currentUser, state = {}) {
-  const { pwError, pwSuccess, photoError, photoSuccess } = state;
+  const { pwError, pwSuccess, photoError, photoSuccess, bioError, bioSuccess } = state;
   return `<!doctype html>
 <html lang="en"><head>${HEAD}<title>My Account — Norwich Droids</title></head>
 <body>
@@ -644,6 +721,20 @@ ${dashNav('change-password', currentUser)}
     <p style="font-size:12.5px; color:var(--muted); margin:14px 0 0;">JPEG, PNG or WEBP, up to 1.5MB. Visible to other logged-in members in the Directory.</p>
   </div>
 
+  <div class="login-card" style="max-width:420px; margin:0 0 28px;">
+    <h1 style="font-size:16px; text-align:left;">About You</h1>
+    ${bioError ? `<div class="login-error">${esc(bioError)}</div>` : ''}
+    ${bioSuccess ? `<div class="admin-success">${esc(bioSuccess)}</div>` : ''}
+    <form method="post" action="/members/account/bio">
+      <div class="field">
+        <label for="bio">A few words for the public About page</label>
+        <textarea id="bio" name="bio" rows="4" maxlength="500" placeholder="e.g. Building a background astromech, always happy to talk dome mechanisms.">${esc(currentUser.bio || '')}</textarea>
+      </div>
+      <button type="submit" class="btn btn-primary">Save Description</button>
+    </form>
+    <p style="font-size:12.5px; color:var(--muted); margin:14px 0 0;">Shown on the public About page alongside your name and droid, once you've saved one. Leave it blank to not show a description.</p>
+  </div>
+
   <div class="login-card" style="max-width:420px; margin:0;">
     <h1 style="font-size:16px; text-align:left;">Change Password</h1>
     ${pwError ? `<div class="login-error">${esc(pwError)}</div>` : ''}
@@ -670,6 +761,7 @@ function adminSubNav(active) {
     <a href="/members/admin" class="${active === 'members' ? 'active' : ''}">Members</a>
     <a href="/members/admin/events" class="${active === 'events' ? 'active' : ''}">Events</a>
     <a href="/members/admin/logs" class="${active === 'logs' ? 'active' : ''}">Build Logs</a>
+    <a href="/members/admin/gallery" class="${active === 'gallery' ? 'active' : ''}">Gallery</a>
   </div>`;
 }
 
@@ -933,6 +1025,52 @@ document.querySelectorAll('form[action="/members/admin/logs/delete"]').forEach((
 </body></html>`;
 }
 
+function adminGalleryHTML({ currentUser, galleryItems, error, notice }) {
+  const rows = galleryItems.map((g) => `
+    <tr>
+      <td><div class="thumb" style="width:64px; height:64px; border-radius:4px;"><img src="/public/gallery-photo/${esc(g.id)}" alt=""></div></td>
+      <td>${esc(g.uploaderName)}</td>
+      <td style="white-space:normal; max-width:280px;">${g.caption ? esc(g.caption) : '<span style="color:var(--muted);">&mdash;</span>'}</td>
+      <td class="admin-actions">
+        <form method="post" action="/members/admin/gallery/delete" onsubmit="return false;" data-photo="${esc(g.uploaderName)}">
+          <input type="hidden" name="photo_id" value="${esc(g.id)}">
+          <button type="submit" class="btn-small btn-danger">Delete</button>
+        </form>
+      </td>
+    </tr>`).join('');
+
+  return `<!doctype html>
+<html lang="en"><head>${HEAD}<title>Admin · Gallery — Norwich Droids</title></head>
+<body>
+${dashNav('admin', currentUser)}
+<div class="dash-main">
+  <h1>Admin</h1>
+  <p class="sub">Remove photos from the public Gallery page. Members add their own from the Gallery tab.</p>
+  ${adminSubNav('gallery')}
+
+  ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
+  ${notice ? `<div class="admin-success">${esc(notice)}</div>` : ''}
+
+  <div class="admin-table-wrap">
+    <table class="admin-table">
+      <thead><tr><th>Photo</th><th>Uploaded By</th><th>Caption</th><th>Actions</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="4">No photos yet.</td></tr>`}</tbody>
+    </table>
+  </div>
+</div>
+<script>
+document.querySelectorAll('form[action="/members/admin/gallery/delete"]').forEach((f) => {
+  f.addEventListener('submit', () => {
+    if (confirm('Delete this photo from ' + f.dataset.photo + '? This cannot be undone.')) {
+      f.removeAttribute('onsubmit');
+      HTMLFormElement.prototype.submit.call(f);
+    }
+  });
+});
+</script>
+</body></html>`;
+}
+
 function setupPageHTML(error) {
   return `<!doctype html>
 <html lang="en"><head>${HEAD}<title>First-time Setup — Norwich Droids</title></head>
@@ -970,6 +1108,46 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname;
+
+    // --- Public API — no login required. Only ever returns fields a member
+    // has chosen to make public (name/droid/bio, or a gallery photo they
+    // uploaded) — never email, password data, or anything else account-related.
+    if (path === '/api/members' && request.method === 'GET') {
+      const users = await listUsers(env);
+      const publicMembers = users.map((u) => ({ name: u.name, droid: u.droid || '', bio: u.bio || '' }));
+      return new Response(JSON.stringify(publicMembers), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
+      });
+    }
+
+    if (path === '/api/gallery' && request.method === 'GET') {
+      const galleryItems = await getGalleryIndex(env);
+      const publicItems = galleryItems.map((g) => ({ id: g.id, uploaderName: g.uploaderName, caption: g.caption || '' }));
+      return new Response(JSON.stringify(publicItems), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
+      });
+    }
+
+    if (path.startsWith('/public/gallery-photo/') && request.method === 'GET') {
+      const id = path.slice('/public/gallery-photo/'.length);
+      const photo = await getGalleryPhotoBlob(env, id);
+      if (!photo) return htmlResponse('Not found.', 404);
+      const bytes = base64ToBytes(photo.data);
+      return new Response(bytes, {
+        status: 200,
+        headers: {
+          'Content-Type': photo.contentType,
+          // Short cache: a photo's id never changes once uploaded, but an
+          // admin can delete it at any time, and this route is public with
+          // no way to bust a shared/cached URL — keep the caching window
+          // short so a moderated-away photo stops being servable quickly.
+          'Cache-Control': 'public, max-age=300',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
+    }
 
     // --- One-time bootstrap: create the first admin account -------------
     if (path === '/members/_setup') {
@@ -1041,8 +1219,9 @@ export default {
       const addedDroids = await readJSON(env, 'droids');
       const users = tab === 'directory' ? await listUsers(env) : [];
       const buildLogs = tab === 'logs' ? await getBuildLogs(env) : [];
+      const galleryItems = tab === 'gallery' ? await getGalleryIndex(env) : [];
       return htmlResponse(dashboardHTML({
-        tab, openEventId: url.searchParams.get('open') || '', events, rsvps, addedDroids, users, buildLogs, currentUser,
+        tab, openEventId: url.searchParams.get('open') || '', events, rsvps, addedDroids, users, buildLogs, galleryItems, currentUser,
       }));
     }
 
@@ -1093,6 +1272,45 @@ export default {
         await saveBuildLogs(env, buildLogs);
       }
       return redirect('/members/dashboard?tab=logs');
+    }
+
+    if (path === '/members/gallery/upload' && request.method === 'POST') {
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      const renderWith = async (galleryError, galleryNotice) => {
+        const galleryItems = await getGalleryIndex(env);
+        return htmlResponse(dashboardHTML({
+          tab: 'gallery', openEventId: '', events: [], rsvps: {}, addedDroids: {}, users: [], buildLogs: [],
+          galleryItems, galleryError, galleryNotice, currentUser,
+        }));
+      };
+
+      const form = await request.formData();
+      const file = form.get('photo');
+      const caption = String(form.get('caption') || '').trim().slice(0, 140);
+      if (!file || typeof file === 'string' || !file.size) {
+        return await renderWith('Please choose a photo to upload.', '');
+      }
+      if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
+        return await renderWith('Photos must be JPEG, PNG, or WEBP.', '');
+      }
+      if (file.size > MAX_PHOTO_BYTES) {
+        return await renderWith('That photo is too large — please use one under 1.5MB.', '');
+      }
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (!matchesDeclaredImageType(bytes, file.type)) {
+        return await renderWith("That file doesn't look like a valid image.", '');
+      }
+      const id = crypto.randomUUID();
+      await saveGalleryPhotoBlob(env, id, file.type, bytesToBase64(bytes));
+      const galleryItems = await getGalleryIndex(env);
+      galleryItems.unshift({ id, uploaderName: currentUser.name, caption, createdAt: new Date().toISOString() });
+      await saveGalleryIndex(env, galleryItems);
+      return htmlResponse(dashboardHTML({
+        tab: 'gallery', openEventId: '', events: [], rsvps: {}, addedDroids: {}, users: [], buildLogs: [],
+        galleryItems, galleryError: '', galleryNotice: 'Photo uploaded — now visible on the public Gallery page.', currentUser,
+      }));
     }
 
     if (path === '/members/change-password') {
@@ -1156,6 +1374,17 @@ export default {
       delete currentUser.photoUpdatedAt;
       await saveUser(env, currentUser);
       return htmlResponse(changePasswordHTML(currentUser, { photoSuccess: 'Photo removed.' }));
+    }
+
+    if (path === '/members/account/bio' && request.method === 'POST') {
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      const form = await request.formData();
+      const bio = String(form.get('bio') || '').trim().slice(0, 500);
+      currentUser.bio = bio;
+      await saveUser(env, currentUser);
+      return htmlResponse(changePasswordHTML(currentUser, { bioSuccess: bio ? 'Description updated.' : 'Description cleared.' }));
     }
 
     if (path.startsWith('/members/photo/') && request.method === 'GET') {
@@ -1428,6 +1657,27 @@ export default {
         const remaining = buildLogs.filter((p) => p.id !== logId);
         await saveBuildLogs(env, remaining);
         return htmlResponse(adminBuildLogsHTML({ currentUser, buildLogs: remaining, error: '', notice: 'Post deleted.', editingLog: null }));
+      }
+
+      // --- Gallery moderation -------------------------------------------
+
+      if (path === '/members/admin/gallery' && request.method === 'GET') {
+        const galleryItems = await getGalleryIndex(env);
+        return htmlResponse(adminGalleryHTML({ currentUser, galleryItems, error: '', notice: '' }));
+      }
+
+      if (path === '/members/admin/gallery/delete' && request.method === 'POST') {
+        const form = await request.formData();
+        const photoId = String(form.get('photo_id') || '');
+        const galleryItems = await getGalleryIndex(env);
+        const target = galleryItems.find((g) => g.id === photoId);
+        if (!target) {
+          return htmlResponse(adminGalleryHTML({ currentUser, galleryItems, error: 'Photo not found.', notice: '' }), 400);
+        }
+        const remaining = galleryItems.filter((g) => g.id !== photoId);
+        await saveGalleryIndex(env, remaining);
+        await deleteGalleryPhotoBlob(env, photoId);
+        return htmlResponse(adminGalleryHTML({ currentUser, galleryItems: remaining, error: '', notice: 'Photo deleted.' }));
       }
 
       return htmlResponse('Not found.', 404);
