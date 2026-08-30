@@ -110,13 +110,16 @@ itself — no dashboard steps needed:
     everywhere else, so a lost or shared device can't stay logged in
     after a password change.
   - From "Admin -> Events" you can add, edit, or delete the events that
-    show up on every member's Events tab (date, location, parking, floor
-    area, accommodation, fuel, and the droids already confirmed for it).
-    Deleting an event also clears any RSVPs/added-droids that were logged
-    against it. This is the members-area event list (with logistics and
-    RSVP) — it's separate from the public Events page at public/events.html,
-    which still just links out to each convention's own website (see
-    section 5).
+    show up on every member's Events tab (date, location, start time,
+    access time, parking, floor area, accommodation, fuel, a free-text
+    description for anything else members should know, and the droids
+    already confirmed for it). Start Time, Access Time, and the
+    description are all optional — leave any of them blank and that part
+    just doesn't show. Deleting an event also clears any RSVPs/added-droids
+    that were logged against it. This is the members-area event list (with
+    logistics and RSVP) — it's separate from the public Events page at
+    public/events.html, which still just links out to each convention's
+    own website (see section 5).
   - Every member (not just admins) can add a profile photo from
     "My Account" — JPEG, PNG, or WEBP — which then shows next to their name
     in the Directory tab instead of their initials. Photos are only ever
@@ -126,9 +129,13 @@ itself — no dashboard steps needed:
     need to resize anything yourself before uploading. Only genuinely huge
     files (over 8MB) or non-photo files get turned away.
   - Any member can post a build-log update from the Build Logs tab (droid
-    + a short caption — their name is added automatically). From
-    "Admin -> Build Logs" you can edit or delete any post, in case
-    something needs correcting or removing.
+    + a short caption — their name is added automatically), and can
+    optionally attach a photo (JPEG, PNG, or WEBP; oversized photos are
+    automatically shrunk to fit, same as profile and gallery photos). These
+    photos are only ever shown in the members-only Build Logs tab, never on
+    the public site. From "Admin -> Build Logs" you can edit or delete any
+    post, in case something needs correcting or removing — deleting a post
+    removes its photo too, if it had one.
   - From "Admin -> Members" there's now an "Edit" button per member to fix
     a typo in their name, email, or droid without having to remove and
     re-add them.
@@ -247,6 +254,13 @@ every photo (who added it, its caption), and the image data itself lives
 under its own "galleryphoto:<id>" key. Add and remove these from the
 Gallery tab (members) and Admin -> Gallery (admins) rather than the
 dashboard directly.
+
+Build log posts live under a single "buildlogs" key, and a post's optional
+photo (if it has one) lives under its own "buildlogphoto:<id>" key, same
+pattern as gallery photos — but served only to logged-in members, never
+publicly. The three new event fields (start time, access time,
+description) are just extra fields on each event inside the "events" key,
+same as the ones that were already there.
 
 Two small pieces of the site are deliberately public with no login at
 all, because they power the public About and Gallery pages: the member
