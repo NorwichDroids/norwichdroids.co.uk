@@ -14,10 +14,11 @@
 // the Admin > Events page, and this array is never read again.
 const SEED_EVENTS = [
   {
-    id: 'charity', day: '05', daySmall: false, month: 'SEP',
+    id: 'charity', day: '05', daySmall: false, month: 'SEP', year: '2026',
     title: 'Feel The Force Day — Team Meet Point', location: 'Peterborough Cathedral, Peterborough',
     startTime: '[Start time TBC]',
     accessTime: '[Access time TBC]',
+    organiser: '[Organiser TBC]',
     parking: 'Free public parking at the Cathedral precinct — arrive early, fills up fast.',
     floorArea: '[Pitch size TBC] — outdoor display pitch in the precinct.',
     accommodation: 'Not provided — day event, home travel expected.',
@@ -30,10 +31,11 @@ const SEED_EVENTS = [
     ],
   },
   {
-    id: 'conv', day: '26–27', daySmall: true, month: 'SEP',
+    id: 'conv', day: '26–27', daySmall: true, month: 'SEP', year: '2026',
     title: 'Nor-Con — Team Meet Point', location: 'Norfolk Showground Arena, Norfolk',
     startTime: '[Start time TBC]',
     accessTime: '[Access time TBC]',
+    organiser: '[Organiser TBC]',
     parking: 'Free exhibitor parking on-site at the Showground.',
     floorArea: '[Pitch size TBC] — indoor arena pitch, confirm with organisers.',
     accommodation: 'Not required — local event.',
@@ -46,10 +48,11 @@ const SEED_EVENTS = [
     ],
   },
   {
-    id: 'mildcon', day: '03', daySmall: false, month: 'OCT',
+    id: 'mildcon', day: '03', daySmall: false, month: 'OCT', year: '2026',
     title: 'Mil-D-Con — Team Meet Point', location: 'RAF Mildenhall, Suffolk',
     startTime: '[Start time TBC]',
     accessTime: '[Access time TBC]',
+    organiser: '[Organiser TBC]',
     parking: 'On-base parking — security pass required in advance, [details TBC].',
     floorArea: '[Pitch size TBC] — indoor hangar display.',
     accommodation: 'Provided — on-base lodging for exhibitors, confirm numbers with the committee.',
@@ -423,6 +426,92 @@ async function saveEvents(env, events) {
   await env.DATA.put('events', JSON.stringify(events));
 }
 
+// Events any member has proposed, awaiting an admin's approve/reject —
+// kept entirely separate from the live "events" list so a submission never
+// shows up for RSVP or on anyone's calendar until an admin has looked at it.
+async function getPendingEvents(env) {
+  const raw = await env.DATA.get('pendingEvents');
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+async function savePendingEvents(env, pendingEvents) {
+  await env.DATA.put('pendingEvents', JSON.stringify(pendingEvents));
+}
+
+const MONTH_ABBREVIATIONS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
+// Events are entered through native <input type="date"> pickers (see
+// eventFormFields below) but stored the same way they always were — a
+// separate day/month/year, with month as a 3-letter abbreviation — so the
+// rest of the app (display, RSVP, admin table) never had to change shape.
+
+// 'YYYY-MM-DD' (what a date input submits) -> { year, month, day }, or null
+// if it isn't a well-formed date.
+function isoDateToDayMonthYear(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+  if (!m) return null;
+  const monthIdx = parseInt(m[2], 10) - 1;
+  if (monthIdx < 0 || monthIdx > 11) return null;
+  const dayNum = parseInt(m[3], 10);
+  if (!dayNum || dayNum < 1 || dayNum > 31) return null;
+  return { year: m[1], month: MONTH_ABBREVIATIONS[monthIdx], day: String(dayNum).padStart(2, '0') };
+}
+
+// The reverse — day/month-abbreviation/year -> 'YYYY-MM-DD' for pre-filling
+// a date input, or '' if any part can't be resolved (e.g. a day range like
+// "26–27", or an older event saved before the year field existed).
+function dayMonthYearToIso(day, monthAbbr, year) {
+  const monthIdx = MONTH_ABBREVIATIONS.indexOf(String(monthAbbr || '').toUpperCase());
+  const dayNum = parseInt(String(day || '').replace(/[^0-9]/g, ''), 10);
+  if (monthIdx === -1 || !/^\d{4}$/.test(String(year || '')) || !dayNum || dayNum < 1 || dayNum > 31) return '';
+  return `${year}-${String(monthIdx + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+}
+
+// Best-effort values to pre-fill the two date pickers when editing an
+// existing event. A day range like "26–27" splits into start/end pickers
+// on the same month/year; anything that can't be parsed (no year on
+// record, an unrecognised month, etc.) is left blank rather than guessed —
+// the admin just picks fresh dates for that one event when they edit it.
+function eventDateInputValues(e) {
+  const dayStr = String(e.day || '');
+  const rangeMatch = dayStr.match(/^(\d+)\s*[–-]\s*(\d+)$/);
+  if (rangeMatch) {
+    return {
+      start: dayMonthYearToIso(rangeMatch[1], e.month, e.year),
+      end: dayMonthYearToIso(rangeMatch[2], e.month, e.year),
+    };
+  }
+  return { start: dayMonthYearToIso(dayStr, e.month, e.year), end: '' };
+}
+
+// Turns the two submitted date-picker fields into { year, month, day, daySmall }
+// (or { error } if the required start date is missing/invalid). If an end date
+// is given, the two are swapped first if submitted backwards, and the day
+// becomes a "DD–DD" range — same one-month assumption the old free-text "26–27"
+// entry already made, so this isn't a new limitation, just an automated version
+// of it. An end date in a different month/year from the start is unusual for
+// this club's events; only the start month/year is used in that case.
+function computeEventDateFields(form) {
+  let dateStart = String(form.get('date_start') || '').trim();
+  let dateEnd = String(form.get('date_end') || '').trim();
+  if (dateEnd && dateEnd < dateStart) {
+    const tmp = dateStart; dateStart = dateEnd; dateEnd = tmp;
+  }
+  const start = isoDateToDayMonthYear(dateStart);
+  if (!start) return { error: 'Please pick a valid event date.' };
+  if (dateEnd && dateEnd !== dateStart) {
+    const end = isoDateToDayMonthYear(dateEnd);
+    if (end) {
+      return { year: start.year, month: start.month, day: `${start.day}–${end.day}`, daySmall: true };
+    }
+  }
+  return { year: start.year, month: start.month, day: start.day, daySmall: false };
+}
+
 function slugify(str) {
   return String(str).toLowerCase().trim()
     .replace(/[^a-z0-9]+/g, '-')
@@ -617,11 +706,10 @@ ${publicFoot()}
 </body></html>`;
 }
 
-function eventsTabHTML(events, rsvps, addedDroids, openEventId) {
-  if (events.length === 0) {
-    return `<p class="sub">No events on the calendar right now — an admin can add one from Admin &gt; Events.</p>`;
-  }
-  return events.map((ev) => {
+function eventsTabHTML(events, rsvps, addedDroids, openEventId, error, notice) {
+  const list = events.length === 0
+    ? `<p class="sub">No events on the calendar right now — an admin can add one, or suggest one yourself with the form on the right.</p>`
+    : events.map((ev) => {
     const status = rsvps[ev.id] || 'undecided';
     const goingClass = status === 'going' ? ' going' : '';
     const rsvpLabel = status === 'going' ? 'Going' : (status === 'not-going' ? "Can't make it" : 'RSVP');
@@ -634,6 +722,7 @@ function eventsTabHTML(events, rsvps, addedDroids, openEventId) {
           <div class="event-date">
             <div class="day${ev.daySmall ? ' small' : ''}">${esc(ev.day)}</div>
             <div class="month">${esc(ev.month)}</div>
+            ${ev.year ? `<div class="year">${esc(ev.year)}</div>` : ''}
           </div>
           <div class="event-info">
             <div class="title">${esc(ev.title)}</div>
@@ -655,6 +744,7 @@ function eventsTabHTML(events, rsvps, addedDroids, openEventId) {
             <div class="detail-grid">
               <div><div class="label">Start Time</div><div class="value">${esc(ev.startTime || 'TBC')}</div></div>
               <div><div class="label">Access Time</div><div class="value">${esc(ev.accessTime || 'TBC')}</div></div>
+              <div><div class="label">Organiser</div><div class="value">${esc(ev.organiser || 'TBC')}</div></div>
               <div><div class="label">Parking</div><div class="value">${esc(ev.parking)}</div></div>
               <div><div class="label">Floor Area</div><div class="value">${esc(ev.floorArea)}</div></div>
               <div><div class="label">Accommodation</div><div class="value">${esc(ev.accommodation)}</div></div>
@@ -691,6 +781,46 @@ function eventsTabHTML(events, rsvps, addedDroids, openEventId) {
         </details>
       </div>`;
   }).join('');
+
+  return `
+    <div class="split-layout">
+      <div class="split-main">${list}</div>
+      <aside class="split-sidebar">
+        <div class="login-card" style="max-width:none; margin:0;">
+          <h1 style="font-size:16px; text-align:left;">Suggest an Event</h1>
+          ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
+          ${notice ? `<div class="admin-success">${esc(notice)}</div>` : ''}
+          <form method="post" action="/members/events/submit?tab=events">
+            <div class="field">
+              <label for="sub_title">Event Title</label>
+              <input type="text" id="sub_title" name="title" required>
+            </div>
+            <div class="field">
+              <label for="sub_date_start">Event Date</label>
+              <input type="date" id="sub_date_start" name="date_start" required>
+            </div>
+            <div class="field">
+              <label for="sub_date_end">End Date <span style="font-weight:400;">(optional)</span></label>
+              <input type="date" id="sub_date_end" name="date_end">
+            </div>
+            <div class="field">
+              <label for="sub_location">Location</label>
+              <input type="text" id="sub_location" name="location" required>
+            </div>
+            <div class="field">
+              <label for="sub_organiser">Organiser</label>
+              <input type="text" id="sub_organiser" name="organiser" placeholder="e.g. Jane Smith">
+            </div>
+            <div class="field">
+              <label for="sub_description">Description &amp; Other Info</label>
+              <textarea id="sub_description" name="description" rows="3" placeholder="Anything else admins/members should know."></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary">Submit for Approval</button>
+          </form>
+          <p style="font-size:12px; color:var(--muted); margin:12px 0 0;">Submitted for an admin's review — it won't show up on the calendar until it's approved.</p>
+        </div>
+      </aside>
+    </div>`;
 }
 
 function directoryTabHTML(users) {
@@ -803,8 +933,8 @@ function dashNav(active, currentUser) {
 </div>`;
 }
 
-function dashboardHTML({ tab, openEventId, events, rsvps, addedDroids, users, buildLogs, logError, logNotice, galleryItems, galleryError, galleryNotice, currentUser }) {
-  const content = tab === 'events' ? eventsTabHTML(events, rsvps, addedDroids, openEventId)
+function dashboardHTML({ tab, openEventId, events, rsvps, addedDroids, users, buildLogs, logError, logNotice, galleryItems, galleryError, galleryNotice, eventsError, eventsNotice, currentUser }) {
+  const content = tab === 'events' ? eventsTabHTML(events, rsvps, addedDroids, openEventId, eventsError, eventsNotice)
     : tab === 'directory' ? directoryTabHTML(users)
     : tab === 'gallery' ? galleryTabHTML(galleryItems, currentUser, galleryError, galleryNotice)
     : logsTabHTML(buildLogs, currentUser, logError, logNotice);
@@ -982,9 +1112,10 @@ document.querySelectorAll('form[action="/members/admin/delete"]').forEach((f) =>
 
 function eventFormFields(ev) {
   const e = ev || {
-    id: '', day: '', daySmall: false, month: '', title: '', location: '',
-    startTime: '', accessTime: '', parking: '', floorArea: '', accommodation: '', fuel: '', description: '', baseDroids: [],
+    id: '', day: '', daySmall: false, month: '', year: '', title: '', location: '',
+    startTime: '', accessTime: '', organiser: '', parking: '', floorArea: '', accommodation: '', fuel: '', description: '', baseDroids: [],
   };
+  const dateValues = eventDateInputValues(e);
   return `
       <div class="field">
         <label for="ev_title">Event Title</label>
@@ -992,16 +1123,13 @@ function eventFormFields(ev) {
       </div>
       <div class="field-row">
         <div class="field">
-          <label for="ev_day">Day</label>
-          <input type="text" id="ev_day" name="day" value="${esc(e.day)}" placeholder="e.g. 05 or 26–27" required>
+          <label for="ev_date_start">Event Date</label>
+          <input type="date" id="ev_date_start" name="date_start" value="${esc(dateValues.start)}" required>
         </div>
         <div class="field">
-          <label for="ev_month">Month</label>
-          <input type="text" id="ev_month" name="month" value="${esc(e.month)}" placeholder="e.g. SEP" maxlength="4" required>
+          <label for="ev_date_end">End Date <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional, for multi-day events)</span></label>
+          <input type="date" id="ev_date_end" name="date_end" value="${esc(dateValues.end)}">
         </div>
-      </div>
-      <div class="field field-checkbox">
-        <label><input type="checkbox" name="day_small" ${e.daySmall ? 'checked' : ''}> Date is a range (e.g. "26–27") — shows in smaller text</label>
       </div>
       <div class="field">
         <label for="ev_location">Location</label>
@@ -1016,6 +1144,10 @@ function eventFormFields(ev) {
           <label for="ev_access_time">Access Time</label>
           <input type="text" id="ev_access_time" name="access_time" value="${esc(e.accessTime || '')}" placeholder="e.g. Exhibitors from 8:00am">
         </div>
+      </div>
+      <div class="field">
+        <label for="ev_organiser">Organiser</label>
+        <input type="text" id="ev_organiser" name="organiser" value="${esc(e.organiser || '')}" placeholder="e.g. Jane Smith">
       </div>
       <div class="field">
         <label for="ev_parking">Parking</label>
@@ -1043,17 +1175,35 @@ function eventFormFields(ev) {
       </div>`;
 }
 
-function adminEventsHTML({ currentUser, events, error, notice, editingEvent }) {
+function adminEventsHTML({ currentUser, events, pendingEvents, error, notice, editingEvent }) {
   const rows = events.map((ev) => `
     <tr>
       <td>${esc(ev.title)}</td>
-      <td>${esc(ev.day)} ${esc(ev.month)}</td>
+      <td>${esc(ev.day)} ${esc(ev.month)}${ev.year ? ` ${esc(ev.year)}` : ''}</td>
       <td>${esc(ev.location)}</td>
       <td class="admin-actions">
         <a class="btn-small" href="/members/admin/events?edit=${encodeURIComponent(ev.id)}">Edit</a>
         <form method="post" action="/members/admin/events/delete" onsubmit="return false;" data-event="${esc(ev.title)}">
           <input type="hidden" name="event_id" value="${esc(ev.id)}">
           <button type="submit" class="btn-small btn-danger">Delete</button>
+        </form>
+      </td>
+    </tr>`).join('');
+
+  const pendingRows = (pendingEvents || []).map((p) => `
+    <tr>
+      <td>${esc(p.title)}</td>
+      <td>${esc(p.day)} ${esc(p.month)}${p.year ? ` ${esc(p.year)}` : ''}</td>
+      <td>${esc(p.location)}</td>
+      <td>${esc(p.submittedBy)}</td>
+      <td class="admin-actions">
+        <form method="post" action="/members/admin/events/approve">
+          <input type="hidden" name="pending_id" value="${esc(p.pendingId)}">
+          <button type="submit" class="btn-small btn-primary">Approve</button>
+        </form>
+        <form method="post" action="/members/admin/events/reject" onsubmit="return false;" data-event="${esc(p.title)}">
+          <input type="hidden" name="pending_id" value="${esc(p.pendingId)}">
+          <button type="submit" class="btn-small btn-danger">Reject</button>
         </form>
       </td>
     </tr>`).join('');
@@ -1069,6 +1219,15 @@ ${dashNav('admin', currentUser)}
 
   ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
   ${notice ? `<div class="admin-success">${esc(notice)}</div>` : ''}
+
+  ${pendingRows ? `
+  <div class="admin-table-wrap" style="margin-bottom:32px;">
+    <h1 style="font-size:16px; margin-bottom:12px;">Pending Approval</h1>
+    <table class="admin-table">
+      <thead><tr><th>Title</th><th>Date</th><th>Location</th><th>Submitted By</th><th>Actions</th></tr></thead>
+      <tbody>${pendingRows}</tbody>
+    </table>
+  </div>` : ''}
 
   <div class="login-card" style="max-width:560px; margin:0 0 40px;">
     <h1 style="font-size:16px; text-align:left;">${editingEvent ? `Edit &ldquo;${esc(editingEvent.title)}&rdquo;` : 'Add an Event'}</h1>
@@ -1091,6 +1250,14 @@ ${dashNav('admin', currentUser)}
 document.querySelectorAll('form[action="/members/admin/events/delete"]').forEach((f) => {
   f.addEventListener('submit', () => {
     if (confirm('Delete \\u201c' + f.dataset.event + '\\u201d? This also clears its RSVPs and added droids. This cannot be undone.')) {
+      f.removeAttribute('onsubmit');
+      HTMLFormElement.prototype.submit.call(f);
+    }
+  });
+});
+document.querySelectorAll('form[action="/members/admin/events/reject"]').forEach((f) => {
+  f.addEventListener('submit', () => {
+    if (confirm('Reject the submission \\u201c' + f.dataset.event + '\\u201d? This cannot be undone.')) {
       f.removeAttribute('onsubmit');
       HTMLFormElement.prototype.submit.call(f);
     }
@@ -1368,7 +1535,8 @@ export default {
       const buildLogs = tab === 'logs' ? await getBuildLogs(env) : [];
       const galleryItems = tab === 'gallery' ? await getGalleryIndex(env) : [];
       return htmlResponse(dashboardHTML({
-        tab, openEventId: url.searchParams.get('open') || '', events, rsvps, addedDroids, users, buildLogs, galleryItems, currentUser,
+        tab, openEventId: url.searchParams.get('open') || '', events, rsvps, addedDroids, users, buildLogs, galleryItems,
+        eventsError: '', eventsNotice: '', currentUser,
       }));
     }
 
@@ -1510,6 +1678,44 @@ export default {
         tab: 'gallery', openEventId: '', events: [], rsvps: {}, addedDroids: {}, users: [], buildLogs: [],
         galleryItems, galleryError: '', galleryNotice: 'Photo uploaded — now visible on the public Gallery page.', currentUser,
       }));
+    }
+
+    // Any logged-in member can propose an event; it only reaches the real
+    // calendar once an admin approves it from Admin > Events.
+    if (path === '/members/events/submit' && request.method === 'POST') {
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      const renderWith = async (eventsError, eventsNotice) => {
+        const events = await getEvents(env);
+        const rsvps = await readJSON(env, 'rsvps');
+        const addedDroids = await readJSON(env, 'droids');
+        return htmlResponse(dashboardHTML({
+          tab: 'events', openEventId: '', events, rsvps, addedDroids, users: [], buildLogs: [],
+          galleryItems: [], eventsError, eventsNotice, currentUser,
+        }));
+      };
+
+      const form = await request.formData();
+      const title = String(form.get('title') || '').trim();
+      const location = String(form.get('location') || '').trim();
+      const dateFields = computeEventDateFields(form);
+      if (!title || dateFields.error || !location) {
+        return await renderWith(dateFields.error || 'Please fill in the event title, date, and location.', '');
+      }
+
+      const pendingEvents = await getPendingEvents(env);
+      pendingEvents.push({
+        pendingId: crypto.randomUUID(),
+        submittedBy: currentUser.name,
+        submittedAt: new Date().toISOString(),
+        day: dateFields.day, daySmall: dateFields.daySmall, month: dateFields.month, year: dateFields.year,
+        title, location,
+        organiser: String(form.get('organiser') || '').trim(),
+        description: String(form.get('description') || '').trim(),
+      });
+      await savePendingEvents(env, pendingEvents);
+      return await renderWith('', 'Thanks — your event has been submitted for admin approval.');
     }
 
     if (path === '/members/change-password') {
@@ -1767,26 +1973,28 @@ export default {
 
       if (path === '/members/admin/events' && request.method === 'GET') {
         const events = await getEvents(env);
+        const pendingEvents = await getPendingEvents(env);
         const editId = url.searchParams.get('edit');
         const editingEvent = editId ? events.find((e) => e.id === editId) || null : null;
-        return htmlResponse(adminEventsHTML({ currentUser, events, error: '', notice: '', editingEvent }));
+        return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents, error: '', notice: '', editingEvent }));
       }
 
       if (path === '/members/admin/events/add' && request.method === 'POST') {
         const form = await request.formData();
         const title = String(form.get('title') || '').trim();
-        const day = String(form.get('day') || '').trim();
-        const month = String(form.get('month') || '').trim().toUpperCase();
         const location = String(form.get('location') || '').trim();
         const events = await getEvents(env);
-        if (!title || !day || !month || !location) {
-          return htmlResponse(adminEventsHTML({ currentUser, events, error: 'Title, day, month, and location are required.', notice: '', editingEvent: null }), 400);
+        const pendingEvents = await getPendingEvents(env);
+        const dateFields = computeEventDateFields(form);
+        if (!title || dateFields.error || !location) {
+          return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents, error: dateFields.error || 'Title, date, and location are required.', notice: '', editingEvent: null }), 400);
         }
         const newEvent = {
           id: uniqueEventId(events, slugify(title)),
-          day, daySmall: form.get('day_small') === 'on', month, title, location,
+          day: dateFields.day, daySmall: dateFields.daySmall, month: dateFields.month, year: dateFields.year, title, location,
           startTime: String(form.get('start_time') || '').trim(),
           accessTime: String(form.get('access_time') || '').trim(),
+          organiser: String(form.get('organiser') || '').trim(),
           parking: String(form.get('parking') || '').trim(),
           floorArea: String(form.get('floor_area') || '').trim(),
           accommodation: String(form.get('accommodation') || '').trim(),
@@ -1796,29 +2004,30 @@ export default {
         };
         events.push(newEvent);
         await saveEvents(env, events);
-        return htmlResponse(adminEventsHTML({ currentUser, events, error: '', notice: `"${newEvent.title}" was added.`, editingEvent: null }));
+        return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents, error: '', notice: `"${newEvent.title}" was added.`, editingEvent: null }));
       }
 
       if (path === '/members/admin/events/update' && request.method === 'POST') {
         const form = await request.formData();
         const eventId = String(form.get('event_id') || '');
         const events = await getEvents(env);
+        const pendingEvents = await getPendingEvents(env);
         const idx = events.findIndex((e) => e.id === eventId);
         if (idx === -1) {
-          return htmlResponse(adminEventsHTML({ currentUser, events, error: 'Event not found.', notice: '', editingEvent: null }), 400);
+          return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents, error: 'Event not found.', notice: '', editingEvent: null }), 400);
         }
         const title = String(form.get('title') || '').trim();
-        const day = String(form.get('day') || '').trim();
-        const month = String(form.get('month') || '').trim().toUpperCase();
         const location = String(form.get('location') || '').trim();
-        if (!title || !day || !month || !location) {
-          return htmlResponse(adminEventsHTML({ currentUser, events, error: 'Title, day, month, and location are required.', notice: '', editingEvent: events[idx] }), 400);
+        const dateFields = computeEventDateFields(form);
+        if (!title || dateFields.error || !location) {
+          return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents, error: dateFields.error || 'Title, date, and location are required.', notice: '', editingEvent: events[idx] }), 400);
         }
         events[idx] = {
           ...events[idx],
-          day, daySmall: form.get('day_small') === 'on', month, title, location,
+          day: dateFields.day, daySmall: dateFields.daySmall, month: dateFields.month, year: dateFields.year, title, location,
           startTime: String(form.get('start_time') || '').trim(),
           accessTime: String(form.get('access_time') || '').trim(),
+          organiser: String(form.get('organiser') || '').trim(),
           parking: String(form.get('parking') || '').trim(),
           floorArea: String(form.get('floor_area') || '').trim(),
           accommodation: String(form.get('accommodation') || '').trim(),
@@ -1827,16 +2036,17 @@ export default {
           baseDroids: parseBaseDroids(form.get('base_droids')),
         };
         await saveEvents(env, events);
-        return htmlResponse(adminEventsHTML({ currentUser, events, error: '', notice: `"${events[idx].title}" was updated.`, editingEvent: null }));
+        return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents, error: '', notice: `"${events[idx].title}" was updated.`, editingEvent: null }));
       }
 
       if (path === '/members/admin/events/delete' && request.method === 'POST') {
         const form = await request.formData();
         const eventId = String(form.get('event_id') || '');
         const events = await getEvents(env);
+        const pendingEvents = await getPendingEvents(env);
         const target = events.find((e) => e.id === eventId);
         if (!target) {
-          return htmlResponse(adminEventsHTML({ currentUser, events, error: 'Event not found.', notice: '', editingEvent: null }), 400);
+          return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents, error: 'Event not found.', notice: '', editingEvent: null }), 400);
         }
         const remaining = events.filter((e) => e.id !== eventId);
         await saveEvents(env, remaining);
@@ -1845,7 +2055,45 @@ export default {
         if (eventId in rsvps) { delete rsvps[eventId]; await writeJSON(env, 'rsvps', rsvps); }
         const droids = await readJSON(env, 'droids');
         if (eventId in droids) { delete droids[eventId]; await writeJSON(env, 'droids', droids); }
-        return htmlResponse(adminEventsHTML({ currentUser, events: remaining, error: '', notice: `"${target.title}" was deleted.`, editingEvent: null }));
+        return htmlResponse(adminEventsHTML({ currentUser, events: remaining, pendingEvents, error: '', notice: `"${target.title}" was deleted.`, editingEvent: null }));
+      }
+
+      if (path === '/members/admin/events/approve' && request.method === 'POST') {
+        const form = await request.formData();
+        const pendingId = String(form.get('pending_id') || '');
+        const pendingEvents = await getPendingEvents(env);
+        const target = pendingEvents.find((p) => p.pendingId === pendingId);
+        const events = await getEvents(env);
+        if (!target) {
+          return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents, error: 'Submission not found — it may have already been handled.', notice: '', editingEvent: null }), 400);
+        }
+        const newEvent = {
+          id: uniqueEventId(events, slugify(target.title)),
+          day: target.day, daySmall: target.daySmall, month: target.month, year: target.year,
+          title: target.title, location: target.location,
+          startTime: target.startTime || '', accessTime: target.accessTime || '', organiser: target.organiser || '',
+          parking: '', floorArea: '', accommodation: '', fuel: '',
+          description: target.description || '', baseDroids: [],
+        };
+        events.push(newEvent);
+        await saveEvents(env, events);
+        const remainingPending = pendingEvents.filter((p) => p.pendingId !== pendingId);
+        await savePendingEvents(env, remainingPending);
+        return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents: remainingPending, error: '', notice: `"${newEvent.title}" was approved and added to the calendar.`, editingEvent: null }));
+      }
+
+      if (path === '/members/admin/events/reject' && request.method === 'POST') {
+        const form = await request.formData();
+        const pendingId = String(form.get('pending_id') || '');
+        const pendingEvents = await getPendingEvents(env);
+        const target = pendingEvents.find((p) => p.pendingId === pendingId);
+        const events = await getEvents(env);
+        if (!target) {
+          return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents, error: 'Submission not found — it may have already been handled.', notice: '', editingEvent: null }), 400);
+        }
+        const remainingPending = pendingEvents.filter((p) => p.pendingId !== pendingId);
+        await savePendingEvents(env, remainingPending);
+        return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents: remainingPending, error: '', notice: `"${target.title}" was rejected and removed from the submission queue.`, editingEvent: null }));
       }
 
       // --- Build log management ---------------------------------------------
