@@ -9,6 +9,11 @@ Cloudflare KV replacing the two JSON files as storage. The public pages
 (Home, About, Events, Gallery) are now plain static .html files — same
 look, same content, just no server-side PHP needed to render them.
 
+The members area also now gives everyone their own individual login
+(name + email + password) instead of one password shared by the whole
+club, with one admin account able to add members and promote others to
+admin — see section 3 below for the one-time setup step.
+
 A Cloudflare KV namespace called "norwich-droids-members" has already been
 created in your account and its ID is already wired into wrangler.jsonc —
 you don't need to create it yourself.
@@ -65,22 +70,45 @@ Wrangler will read wrangler.jsonc and deploy the Worker plus the public/
 static files together. It will print your workers.dev URL when done.
 
 
-3. SET THE REAL MEMBERS PASSWORD
-------------------------------------
-The shared password is stored as a Cloudflare "secret" — never written into
-any file, so it's never at risk of being visible in the repository.
+3. CREATE THE FIRST ADMIN ACCOUNT (one-time step)
+------------------------------------------------------
+Every member now has their own login (their own email + password) instead
+of one shared password. There are no Cloudflare secrets to set up at all —
+this was a deliberate change, because the old shared-password secret
+turned out to be unreliable to configure. Nothing here needs the
+dashboard's Variables/Secrets screen.
 
-Via the dashboard:
-  Workers & Pages -> your Worker -> Settings -> Variables and Secrets ->
-  Add -> name it exactly  MEMBERS_PASSWORD  -> type your chosen password ->
-  Encrypt -> Save and deploy.
+The very first admin account is created by visiting a special one-time
+setup link in your browser, once, straight after your first deploy:
 
-Via the command line instead, if you used option 2 above:
-  npx wrangler secret put MEMBERS_PASSWORD
-  (it will prompt you to type the password)
+  https://<your-worker-url>/members/_setup?token=9856825dfffddf49fc0139a57840850be646264818193ba5
 
-Everyone shares this one password to reach the Members Area — there are no
-individual accounts, same as before.
+(replace <your-worker-url> with your actual workers.dev address, or your
+real domain once that's connected). This page will ask for your name,
+email and a password — fill it in and submit, and you'll be logged straight
+in as the first admin.
+
+This link only works ONCE: the moment any admin account exists, the setup
+page permanently switches itself off (it will show an error if you visit
+it again), so there's no way for anyone else to use it to create an extra
+admin account later. You don't need to remember or protect the token in
+the link above for long — it stops being useful within seconds of your
+first deploy going live.
+
+Once you're logged in as admin, everything else happens from the site
+itself — no dashboard steps needed:
+
+  - Go to "Admin" in the members-area navigation to add new members. Enter
+    their name and email; the system generates a one-time starting
+    password shown on screen, which you pass on to them. They can change
+    it themselves afterwards from "My Account".
+  - From the same Admin page you can promote a member to admin, demote an
+    admin back to a regular member (you can't demote yourself if you're
+    the only admin left — the site won't let the club get locked out),
+    reset anyone's password if they lose it, or remove a member entirely.
+  - Changing or resetting a password immediately signs that person out
+    everywhere else, so a lost or shared device can't stay logged in
+    after a password change.
 
 
 4. POINT norwichdroids.co.uk AT THIS SITE
@@ -123,7 +151,9 @@ normal for a site this size:
   - Droid showcase cards:       public/index.html
   - Member events + logistics:  src/index.js  (the EVENTS array near the top)
   - Droid type dropdown:        src/index.js  (the DROID_OPTIONS array)
-  - Member directory:           src/index.js  (the MEMBERS array)
+  - Member directory:           managed from the Admin page on the live site
+                                 itself now (no file to edit) — it lists
+                                 whoever has an account
   - Build log posts:            src/index.js  (the BUILD_LOGS array)
   - Footer email/address:       every public/*.html file, near the bottom
 
@@ -150,12 +180,18 @@ rule). To use real photos:
 
 7. HOW DATA IS STORED NOW
 -----------------------------
-RSVPs and added droids are stored in the "norwich-droids-members" KV
-namespace instead of the old JSON files — you don't need to manage this
-directly, the Worker reads and writes it automatically. If you ever want
-to clear all RSVPs/added droids and start fresh, you can do so from the
-Cloudflare dashboard under Workers & Pages -> KV -> norwich-droids-members
--> delete the "rsvps" and/or "droids" keys.
+RSVPs, added droids, member accounts, and login sessions are all stored in
+the KV namespace wired up in wrangler.jsonc — you don't need to manage this
+directly, the Worker reads and writes it automatically. If you ever want to
+clear all RSVPs/added droids and start fresh, you can do so from the
+Cloudflare dashboard under Workers & Pages -> KV -> (your namespace) ->
+delete the "rsvps" and/or "droids" keys.
+
+Member accounts live there too, as "user:<id>" and "email:<address>" keys,
+and passwords are never stored in plain text — only a salted, hashed form
+that can't be reversed. There's normally no need to touch these directly;
+use the Admin page on the site itself to add, promote, demote, reset, or
+remove members instead.
 
 
 QUESTIONS

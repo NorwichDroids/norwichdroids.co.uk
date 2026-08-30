@@ -18,6 +18,7 @@
     { "binding": "DATA", "id": "f33939aa720842c49799c06f9244fbbd" }
   ]
 
-  // NOTE: the shared members password is NOT set here (never put secrets in
-  // this file). Set it as a secret named MEMBERS_PASSWORD — see README.txt.
+  // NOTE: this site now uses individual member logins (not a shared
+  // password), so there is no secret to configure here at all — see
+  // README.txt section 3 for the one-time step to create the first admin.
 }
