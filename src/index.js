@@ -2012,6 +2012,21 @@ ${publicFoot()}
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    // Force HTTPS for every request — static pages and the members area
+    // alike, since everything passes through this fetch handler before
+    // anything else (see the top-of-file comment). A plain-HTTP visit is
+    // redirected once, permanently, to the same URL under https:// before
+    // any page is rendered or any cookie is read/set, so a session cookie
+    // is never sent or received over an unencrypted connection.
+    // (Cloudflare's dashboard has an equivalent "Always Use HTTPS" toggle
+    // under SSL/TLS — this does the same thing from inside the Worker so
+    // it doesn't depend on that setting being turned on.)
+    if (url.protocol === 'http:') {
+      url.protocol = 'https:';
+      return Response.redirect(url.toString(), 301);
+    }
+
     const path = url.pathname;
 
     // --- Public API — no login required. Only ever returns fields a member
