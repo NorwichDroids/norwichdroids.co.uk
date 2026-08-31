@@ -128,6 +128,14 @@ itself — no dashboard steps needed:
     droid list, which stay members-only. Once an event's last day has
     passed, it quietly drops off the public page on its own (it stays on
     the members-area list and in the admin table either way).
+  - Tick "Private event" on the add/edit form to keep an event off the
+    PUBLIC Events page entirely — useful for committee meetups or anything
+    else that isn't meant for public listing. A private event still shows
+    up on every member's own Events tab as normal (with a small "Private"
+    badge so it's clear it's not public), and members can still RSVP and
+    add confirmed droids to it exactly like any other event — only the
+    public page hides it. Only an admin can mark an event private; there's
+    no way for a member to do this from the "Suggest an Event" form.
   - Members aren't limited to just watching the calendar — from their own
     Events tab there's a "Suggest an Event" form where any member can
     propose a new event (title, date, location, an optional website link,
@@ -156,12 +164,28 @@ itself — no dashboard steps needed:
     optionally attach a photo (JPEG, PNG, or WEBP; oversized photos are
     automatically shrunk to fit, same as profile and gallery photos). These
     photos are only ever shown in the members-only Build Logs tab, never on
-    the public site. From "Admin -> Build Logs" you can edit or delete any
-    post, in case something needs correcting or removing — deleting a post
-    removes its photo too, if it had one.
+    the public site. Each post has an "Edit" link so the person who posted
+    it can fix a typo or add/replace its photo later themselves — an admin
+    can still edit or delete ANY post from "Admin -> Build Logs" too, in
+    case something needs correcting or removing; deleting a post removes
+    its photo too, if it had one.
   - From "Admin -> Members" there's now an "Edit" button per member to fix
     a typo in their name, email, or droid without having to remove and
-    re-add them.
+    re-add them. The same table also shows each member's "Last Login" —
+    "Never" if they haven't signed in yet, otherwise the date and time
+    (UTC) of their most recent login — so you can see at a glance who's
+    actually using the site.
+  - The Droid dropdown that appears on every form (RSVPs, Build Logs,
+    Gallery, Our Droids) is no longer a fixed list — from "Admin -> Droids"
+    there's a "Manage Droid Types" panel where an admin can add a new droid
+    type or remove one, and every change is reflected on every form
+    immediately. "Other Build" is always available too as a permanent
+    fallback option on every dropdown (it can't be removed, since it's not
+    really a stored entry): if a member picks it and types a custom droid
+    name, that name is used for their entry AND automatically added to the
+    shared list, so it shows up as a normal choice for everyone else from
+    then on (typing the same name again later reuses the existing entry
+    rather than creating a duplicate).
   - Every member can add a short "About You" description, and a nickname,
     from "My Account" (the description up to 500 characters, the nickname
     up to 40). Once saved, both show up on the PUBLIC About page's "Meet
@@ -171,22 +195,47 @@ itself — no dashboard steps needed:
     just doesn't show. A member with no account created yet never appears
     on the About page at all — there are no placeholder/fake members, only
     real registered members who exist show up, and only once they exist.
-  - Every member can add photos from the Gallery tab (JPEG, PNG, or WEBP)
-    which then show up immediately on the PUBLIC Gallery page for anyone to
-    see — no login needed to view them. Same as profile photos, an
-    oversized photo is automatically shrunk to fit rather than rejected.
-    From "Admin -> Gallery" any admin can remove a photo that shouldn't be
-    there; members can only add, not remove (same "add vs moderate" split
-    as Build Logs).
+  - Every member can add photos from the Gallery tab (JPEG, PNG, or WEBP) —
+    and can select several files at once to upload them all together (up to
+    10 per submission), sharing one caption. If anything in a multi-photo
+    batch fails (wrong file type, too large, etc.), the whole batch is
+    rejected together and nothing from it is saved, rather than uploading
+    some and silently dropping others. Each upload can optionally be tagged
+    to one of the events on the calendar (or left as a general photo, not
+    tied to any event). Tagged photos then show up immediately on the
+    PUBLIC Gallery page, grouped into a separate box per event (with the
+    event's date shown), plus a "General Photos" box last for anything not
+    tagged to an event — no login needed to view any of it. Same as profile
+    photos, an oversized photo is automatically shrunk to fit rather than
+    rejected. Each photo shows an "Edit" link to whoever uploaded it, so
+    they can change the caption, re-tag it to a different event, or swap
+    the photo itself later. From "Admin -> Gallery" any admin can remove a
+    photo that shouldn't be there (the admin table also shows which event,
+    if any, each photo is tagged to); members can edit their own photos but
+    can't remove anyone else's, and can't edit anyone else's either — only
+    an admin can remove.
   - Every member can add a photo of their own droid from the "Our Droids"
     tab (droid type, an optional custom name like "R5-D3", an optional
     caption, and a required photo — JPEG, PNG, or WEBP, auto-shrunk if
     oversized same as everywhere else). These photos replace the old
     generic "R2 Astromechs / BB-Series / Other Builds" placeholder cards in
     the "Our Droids" section on the PUBLIC homepage — no login needed to
-    view them. From "Admin -> Droids" any admin can remove a photo that
-    shouldn't be there; members can only add, not remove (same pattern as
-    the Gallery and Build Logs).
+    view them, and the full photo is always shown there (resized to fit
+    the card without cropping any of it off). Each entry shows an "Edit"
+    link to whoever added it, so they can change the droid type, name, or
+    caption, or swap the photo, later. From "Admin -> Droids" any admin can
+    remove a photo that shouldn't be there; members can edit their own
+    entries but can't remove anyone else's, and can't edit anyone else's
+    either — only an admin can remove.
+  - Photo uploads and edits everywhere above (profile photo, Gallery,
+    Build Logs, Our Droids) open a crop-and-rotate tool right in the
+    browser before the file is submitted — drag/resize the crop box, use
+    the rotate buttons if the photo's sideways, then "Use This Photo". This
+    is entirely optional to use well: if you'd rather not crop, just leave
+    the default framing and submit as normal. If this editor ever fails to
+    load (e.g. no internet connection to the small library it uses),
+    photo uploads simply behave as a plain file picker instead — nothing
+    stops working.
 
 
 4. POINT norwichdroids.co.uk AT THIS SITE
@@ -239,7 +288,11 @@ normal for a site this size:
                                  link, location, organiser, parking, floor
                                  area, accommodation, fuel, and confirmed
                                  droids all live there
-  - Droid type dropdown:        src/index.js  (the DROID_OPTIONS array)
+  - Droid type dropdown:        managed from "Admin -> Droids" on the live
+                                 site now (the "Manage Droid Types" panel) —
+                                 no file to edit; src/index.js's
+                                 DROID_OPTIONS array only seeds the starting
+                                 list the very first time the site runs
   - Member directory:           managed from the Admin page on the live site
                                  itself now (no file to edit) — it lists
                                  whoever has an account, with their photo if
@@ -261,10 +314,12 @@ details, etc.).
 
 6. REPLACING PLACEHOLDER PHOTOS
 ----------------------------------
-Member directory photos on the About page (public/about.html) still show a
-striped "PHOTO" placeholder (defined in public/css/style.css, the .thumb
-rule) — the homepage droid showcase and the Gallery page both already show
-real member-uploaded photos. To use real photos elsewhere:
+The homepage droid showcase, the Gallery page, and the About page's "Meet
+the Members" section all already show real member-uploaded photos once a
+member has added one (from "Our Droids", "Gallery", and "My Account"
+respectively) — a member who hasn't yet just shows a striped "PHOTO"
+placeholder (defined in public/css/style.css, the .thumb rule) until they
+do. To use real photos elsewhere, e.g. resource-card logos:
   - Add your image files into public/img/.
   - In the relevant .html file (or src/index.js for build logs), replace:
         <div class="thumb">PHOTO</div>
@@ -326,6 +381,36 @@ remove these from the Our Droids tab (members) and Admin -> Droids
 (admins) rather than the dashboard directly. A member's nickname is
 stored on their own account record, same as their bio — no separate key.
 
+The droid type list used by every dropdown lives under its own "droidTypes"
+key (a plain list of names) — seeded automatically from a starting list the
+first time the site runs, then managed from "Admin -> Droids" from then on.
+Gallery photos also carry an "eventId" field alongside everything else
+already stored on them, linking a photo to one of the events in the
+"events" key (or left empty for a general photo not tied to any event) —
+this is what the public Gallery page uses to group photos into per-event
+boxes; a photo tagged to an event that's later deleted just falls back to
+being treated as a general photo rather than being lost. Events carry an
+"isPrivate" flag, same as their other fields — the public events API
+filters these out, and the public gallery API leaves out any photo tagged
+to a private event too, so a private event's photos and details never
+reach the public pages even indirectly.
+
+Each member account also now carries a "lastLoginAt" field, updated
+automatically every time they log in (or, for the very first admin, the
+moment their account is created) — shown to admins only, on the "Admin ->
+Members" table. Nothing to manage here directly.
+
+Gallery photos, build-log posts, and droid showcase entries each also
+carry an "ownerId" field alongside the display name already stored on
+them (uploaderName / author / builderName) — it's set once, automatically,
+when the item is created, and is what lets a member edit their own entries
+later from the Gallery, Build Logs, and Our Droids tabs without being able
+to touch anyone else's, even if an admin later renames them. Nothing to
+manage here directly. Entries that already existed before this feature was
+added have no "ownerId" at all, so they simply have no "Edit" link for any
+member — an admin can still edit (build logs) or remove (all three) them
+as before.
+
 A few small pieces of the site are deliberately public with no login at
 all, because they power the public homepage, About, and Gallery pages: the
 member list (name, nickname, droid, description, and profile photo only —
@@ -343,6 +428,17 @@ need to do. If that package were ever somehow unavailable, the site
 doesn't break: uploads just go back to being rejected with a "please use
 one under 1.5MB" message instead of being resized, exactly like before
 this feature existed.
+
+The in-browser crop-and-rotate tool on photo uploads (My Account, Gallery,
+Build Logs, Our Droids) is a separate thing from the resizing above — it
+runs entirely in the visitor's browser, before the photo is even
+submitted, using a well-established open-source library called
+Cropper.js loaded from a public CDN (cdnjs.cloudflare.com), pinned to a
+specific version. Nothing to install or maintain for this either. If that
+CDN is ever unreachable, the crop step just doesn't appear and the file
+input works as a plain upload instead — every photo is still independently
+checked and validated on the server exactly as described above regardless
+of whether it was cropped first.
 
 
 QUESTIONS
