@@ -264,6 +264,9 @@ h1, h2, h3, .display {
 }
 .card .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
+/* Our Droids (public homepage) — show the whole photo within the box rather than cropping it */
+#droid-grid .thumb img { object-fit: contain; background: var(--cream-panel); }
+
 .card .body { padding: 18px 20px; }
 .card .body h4 { font-family: 'Exo 2', sans-serif; font-weight: 700; font-size: 15px; margin: 0 0 6px; }
 .card .body p { font-size: 13.5px; color: var(--text); line-height: 1.5; margin: 0; }
@@ -602,6 +605,23 @@ a.btn-small { display: inline-block; text-decoration: none; }
 .directory-card .avatar,
 .directory-card .avatar-img { width: 44px; height: 44px; font-size: 15px; flex: 0 0 44px; }
 .avatar-img-lg { width: 64px; height: 64px; flex: 0 0 64px; }
+
+/* Photo editor (crop + rotate) — Members Area only. Falls back to a plain
+   file upload if the Cropper.js library never loads (see PHOTO_EDITOR_HEAD
+   / photoEditorMarkup in src/index.js), so nothing here is load-bearing. */
+.photo-editor-overlay {
+  position: fixed; inset: 0; background: rgba(20, 18, 10, 0.88);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px; z-index: 1000;
+}
+.photo-editor-overlay[hidden] { display: none; }
+.photo-editor-box {
+  background: var(--card); border-radius: 6px; padding: 22px;
+  width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 16px;
+}
+.photo-editor-image-wrap { width: 100%; height: 360px; background: #17150f; overflow: hidden; }
+.photo-editor-image-wrap img { display: block; max-width: 100%; }
+.photo-editor-controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 
 /* Responsive */
 @media (max-width: 900px) {
