@@ -68,11 +68,67 @@ const SEED_EVENTS = [
   },
 ];
 
-// Edit this to add, remove, or update droid types in the "add your droid" dropdown.
+// Starting droid type list — only used to seed the "droidTypes" KV key the
+// very first time the site runs. After that, the list lives in KV: an admin
+// can add or remove types from Admin > Droids, and picking "Other Build" and
+// naming a droid anywhere in the site folds that name into the list too (see
+// resolveDroidType below) so it becomes a normal dropdown choice from then
+// on. "Other Build" itself is never stored in this list — every dropdown
+// that uses it appends that option separately, as a permanent fallback that
+// can't be accidentally removed.
 const DROID_OPTIONS = [
   'R2 Unit', 'R5 Unit', 'BB-8', 'MSE-6', 'K-2SO', 'Imperial Probe Droid', 'Essie',
-  'Pit Droid', 'Huyang', 'Battle Droid', 'Super Battle Droid', 'IG Unit', 'Other Build',
+  'Pit Droid', 'Huyang', 'Battle Droid', 'Super Battle Droid', 'IG Unit',
 ];
+const OTHER_DROID_TYPE = 'Other Build';
+
+async function getDroidTypes(env) {
+  const raw = await env.DATA.get('droidTypes');
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    } catch { /* fall through to reseed */ }
+  }
+  await env.DATA.put('droidTypes', JSON.stringify(DROID_OPTIONS));
+  return DROID_OPTIONS;
+}
+
+async function saveDroidTypes(env, types) {
+  await env.DATA.put('droidTypes', JSON.stringify(types));
+}
+
+// Renders every droid-type <select>'s options consistently: the current
+// list, then the permanent "Other Build" fallback last.
+function droidTypeOptions(droidTypes, selectedValue) {
+  const listed = droidTypes.map((opt) => `<option value="${esc(opt)}" ${selectedValue === opt ? 'selected' : ''}>${esc(opt)}</option>`).join('');
+  return listed + `<option value="${esc(OTHER_DROID_TYPE)}" ${selectedValue === OTHER_DROID_TYPE ? 'selected' : ''}>${esc(OTHER_DROID_TYPE)}</option>`;
+}
+
+// Called by every route that accepts a droid-type field alongside its
+// companion "other" text field. If the member picked the Other Build
+// fallback and actually named something, that name becomes the real stored
+// value AND — if it's genuinely new — gets folded into the shared droid
+// type list (case-insensitively de-duplicated) so it shows up as a normal
+// dropdown choice for everyone from then on.
+// The shared list grows automatically from ordinary member use, so it needs
+// a ceiling — otherwise a member could script repeated submissions with a
+// unique custom name each time and bloat the KV value read on nearly every
+// page load. The custom name is always still used for THIS submission even
+// once the list is full; it just stops being folded in for reuse.
+const MAX_DROID_TYPES = 200;
+
+async function resolveDroidType(env, submittedType, customType) {
+  const custom = String(customType || '').trim().slice(0, 60);
+  if (submittedType !== OTHER_DROID_TYPE || custom === '') return submittedType;
+  const types = await getDroidTypes(env);
+  const alreadyListed = types.some((t) => t.toLowerCase() === custom.toLowerCase());
+  if (!alreadyListed && types.length < MAX_DROID_TYPES) {
+    types.push(custom);
+    await saveDroidTypes(env, types);
+  }
+  return custom;
+}
 
 // Starting build-log posts — only used to seed the "buildlogs" KV key the
 // first time the site runs. After that, members add their own posts from
@@ -109,11 +165,25 @@ const MAX_PHOTO_BYTES = 1.5 * 1024 * 1024; // 1.5MB — the size a photo must fi
 const MAX_PHOTO_UPLOAD_BYTES = 8 * 1024 * 1024; // hard ceiling on the RAW file a member selects, before any resizing is attempted
 const MAX_PHOTO_DIMENSION = 1600; // longest edge, in pixels, once resized
 const ALLOWED_PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const MAX_GALLERY_PHOTOS_PER_UPLOAD = 10; // cap on a single multi-select Gallery upload
 
 function esc(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[c]));
+}
+
+// Used for Admin > Members' "Last Login" column — a plain, unambiguous
+// day/month/year + time rather than relying on locale guesses.
+function formatDateTime(ms) {
+  if (!ms) return 'Never';
+  const d = new Date(ms);
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  const month = MONTH_ABBREVIATIONS[d.getUTCMonth()];
+  const year = d.getUTCFullYear();
+  const hours = String(d.getUTCHours()).padStart(2, '0');
+  const minutes = String(d.getUTCMinutes()).padStart(2, '0');
+  return `${day} ${month} ${year}, ${hours}:${minutes} UTC`;
 }
 
 // Only http(s) links are ever stored/rendered as an event's "more details"
@@ -590,6 +660,21 @@ function eventSortIso(e) {
   return dayMonthYearToIso(firstDay, e.month, e.year) || '9999-99-99';
 }
 
+// Short "Title — 12 SEP 2026" label used for the event picker on the
+// Gallery upload form, and options for that dropdown (most recent first,
+// plus a "General Photos" choice for anything not tied to a specific event).
+function eventLabel(ev) {
+  const dateParts = [ev.day, ev.month, ev.year].filter(Boolean).join(' ');
+  return dateParts ? `${ev.title} — ${dateParts}` : ev.title;
+}
+
+function eventPickerOptions(events, selectedEventId) {
+  const sorted = [...events].sort((a, b) => (eventSortIso(b) < eventSortIso(a) ? -1 : eventSortIso(b) > eventSortIso(a) ? 1 : 0));
+  const generalSelected = !selectedEventId ? ' selected' : '';
+  const eventOptions = sorted.map((ev) => `<option value="${esc(ev.id)}" ${selectedEventId === ev.id ? 'selected' : ''}>${esc(eventLabel(ev))}</option>`).join('');
+  return `<option value=""${generalSelected}>General Photos (not tied to an event)</option>` + eventOptions;
+}
+
 function slugify(str) {
   return String(str).toLowerCase().trim()
     .replace(/[^a-z0-9]+/g, '-')
@@ -902,7 +987,7 @@ ${publicFoot()}
 </body></html>`;
 }
 
-function eventsTabHTML(events, rsvps, addedDroids, openEventId, error, notice) {
+function eventsTabHTML(events, rsvps, addedDroids, openEventId, error, notice, droidTypes) {
   const list = events.length === 0
     ? `<p class="sub">No events on the calendar right now — an admin can add one, or suggest one yourself with the form on the right.</p>`
     : events.map((ev) => {
@@ -921,7 +1006,7 @@ function eventsTabHTML(events, rsvps, addedDroids, openEventId, error, notice) {
             ${ev.year ? `<div class="year">${esc(ev.year)}</div>` : ''}
           </div>
           <div class="event-info">
-            <div class="title">${esc(ev.title)}</div>
+            <div class="title">${esc(ev.title)}${ev.isPrivate ? ' <span class="badge-private">Private</span>' : ''}</div>
             <div class="loc">${esc(ev.location)}</div>
           </div>
           <form method="post" action="/members/rsvp?tab=events">
@@ -970,7 +1055,7 @@ function eventsTabHTML(events, rsvps, addedDroids, openEventId, error, notice) {
               <div class="row">
                 <input type="text" name="name" placeholder="Your name" required>
                 <select name="droid">
-                  ${DROID_OPTIONS.map((opt) => `<option value="${esc(opt)}">${esc(opt)}</option>`).join('')}
+                  ${droidTypeOptions(droidTypes, '')}
                 </select>
                 <button type="submit">Add</button>
               </div>
@@ -1042,7 +1127,7 @@ function directoryTabHTML(users) {
       </div>`).join('')}</div>`;
 }
 
-function logsTabHTML(buildLogs, currentUser, error, notice, editId) {
+function logsTabHTML(buildLogs, currentUser, error, notice, editId, droidTypes) {
   // Members can edit only their OWN posts (ownerId, not the display-name
   // author field — an admin can rename a member later). Legacy posts from
   // before ownerId existed have none, so they simply have no Edit link;
@@ -1078,8 +1163,12 @@ function logsTabHTML(buildLogs, currentUser, error, notice, editId) {
             <div class="field">
               <label for="log_droid">Droid</label>
               <select id="log_droid" name="droid" required>
-                ${DROID_OPTIONS.map((opt) => `<option value="${esc(opt)}" ${editingItem && editingItem.droid === opt ? 'selected' : ''}>${esc(opt)}</option>`).join('')}
+                ${droidTypeOptions(droidTypes, editingItem ? editingItem.droid : '')}
               </select>
+            </div>
+            <div class="field">
+              <label for="log_other_droid">If you picked &quot;Other Build&quot; above <span style="font-weight:400; text-transform:none; letter-spacing:0;">(name it here)</span></label>
+              <input type="text" id="log_other_droid" name="other_droid" maxlength="60" placeholder="e.g. Frankenbuild Astromech">
             </div>
             <div class="field">
               <label for="log_caption">What's new?</label>
@@ -1098,21 +1187,32 @@ function logsTabHTML(buildLogs, currentUser, error, notice, editId) {
     </div>`;
 }
 
-function galleryTabHTML(galleryItems, currentUser, error, notice, editId) {
+function galleryTabHTML(galleryItems, currentUser, error, notice, editId, events) {
   // Same owner-only edit rule as build logs above.
   const editingItem = editId ? galleryItems.find((g) => g.id === editId && g.ownerId === currentUser.id) : null;
+  const eventById = new Map((events || []).map((ev) => [ev.id, ev]));
 
   const photos = galleryItems.length === 0
     ? `<p class="sub">No photos yet — be the first to share one with the form on the right.</p>`
-    : `<div class="gallery-grid">${galleryItems.map((g) => `
+    : `<div class="gallery-grid">${galleryItems.map((g) => {
+      const linkedEvent = g.eventId ? eventById.get(g.eventId) : null;
+      const eventNote = linkedEvent ? ` &middot; <span style="color:var(--muted);">${esc(linkedEvent.title)}</span>` : '';
+      return `
       <div class="card">
         <div class="thumb"><img src="/public/gallery-photo/${esc(g.id)}" alt="${esc(g.caption || g.uploaderName)}"></div>
-        <div class="caption">${g.caption ? `${esc(g.caption)} &middot; ` : ''}${esc(g.uploaderName)}${g.ownerId === currentUser.id ? ` &middot; <a href="/members/dashboard?tab=gallery&edit=${encodeURIComponent(g.id)}">Edit</a>` : ''}</div>
-      </div>`).join('')}</div>`;
+        <div class="caption">${g.caption ? `${esc(g.caption)} &middot; ` : ''}${esc(g.uploaderName)}${eventNote}${g.ownerId === currentUser.id ? ` &middot; <a href="/members/dashboard?tab=gallery&edit=${encodeURIComponent(g.id)}">Edit</a>` : ''}</div>
+      </div>`;
+    }).join('')}</div>`;
 
-  const formTitle = editingItem ? 'Edit Your Photo' : 'Add a Photo';
+  const formTitle = editingItem ? 'Edit Your Photo' : 'Add Photos';
   const formAction = editingItem ? '/members/gallery/update' : '/members/gallery/upload';
-  const submitLabel = editingItem ? 'Save Changes' : 'Upload Photo';
+  const submitLabel = editingItem ? 'Save Changes' : 'Upload';
+  // Editing always replaces exactly one photo (its own crop/rotate-capable
+  // single-file input); adding is a multi-select, which the crop/rotate
+  // tool deliberately doesn't attach to — see PHOTO_EDITOR_HEAD's comment.
+  const photoField = editingItem
+    ? `<input type="file" id="gallery_photo" name="photo" accept="image/jpeg,image/png,image/webp" data-photo-editor>`
+    : `<input type="file" id="gallery_photo" name="photos" accept="image/jpeg,image/png,image/webp" multiple required>`;
 
   return `
     <div class="split-layout">
@@ -1125,23 +1225,29 @@ function galleryTabHTML(galleryItems, currentUser, error, notice, editId) {
           <form method="post" action="${formAction}" enctype="multipart/form-data">
             ${editingItem ? `<input type="hidden" name="photo_id" value="${esc(editingItem.id)}">` : ''}
             <div class="field">
-              <label for="gallery_photo">Photo ${editingItem ? '<span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — leave blank to keep the current photo)</span>' : ''}</label>
-              <input type="file" id="gallery_photo" name="photo" accept="image/jpeg,image/png,image/webp" data-photo-editor ${editingItem ? '' : 'required'}>
+              <label for="gallery_photo">${editingItem ? 'Photo <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — leave blank to keep the current photo)</span>' : 'Photo(s) <span style="font-weight:400; text-transform:none; letter-spacing:0;">(select more than one to upload them together)</span>'}</label>
+              ${photoField}
             </div>
             <div class="field">
-              <label for="gallery_caption">Caption (optional)</label>
+              <label for="gallery_event">Event <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — groups it on the public Gallery page)</span></label>
+              <select id="gallery_event" name="event_id">
+                ${eventPickerOptions(events || [], editingItem ? (editingItem.eventId || '') : '')}
+              </select>
+            </div>
+            <div class="field">
+              <label for="gallery_caption">Caption ${editingItem ? '' : '<span style="font-weight:400; text-transform:none; letter-spacing:0;">(applied to every photo in this upload)</span>'}</label>
               <input type="text" id="gallery_caption" name="caption" maxlength="140" placeholder="e.g. Nor-Con 2026 stall" value="${editingItem ? esc(editingItem.caption || '') : ''}">
             </div>
             <button type="submit" class="btn btn-primary">${submitLabel}</button>
             ${editingItem ? `<a href="/members/dashboard?tab=gallery" class="btn-small" style="margin-left:10px;">Cancel</a>` : ''}
           </form>
-          <p style="font-size:12px; color:var(--muted); margin:12px 0 0;">JPEG, PNG or WEBP, up to 1.5MB. Shown on the public Gallery page for everyone to see. You can edit your own photos any time — an admin can remove any photo from Admin &gt; Gallery.</p>
+          <p style="font-size:12px; color:var(--muted); margin:12px 0 0;">JPEG, PNG or WEBP, up to 1.5MB each (up to ${MAX_GALLERY_PHOTOS_PER_UPLOAD} at once). Shown on the public Gallery page for everyone to see. You can edit your own photos any time — an admin can remove any photo from Admin &gt; Gallery.</p>
         </div>
       </aside>
     </div>`;
 }
 
-function droidsTabHTML(droidShowcase, currentUser, error, notice, editId) {
+function droidsTabHTML(droidShowcase, currentUser, error, notice, editId, droidTypes) {
   // Same owner-only edit rule as build logs / gallery above.
   const editingItem = editId ? droidShowcase.find((d) => d.id === editId && d.ownerId === currentUser.id) : null;
 
@@ -1174,8 +1280,12 @@ function droidsTabHTML(droidShowcase, currentUser, error, notice, editId) {
             <div class="field">
               <label for="droid_type">Droid Type</label>
               <select id="droid_type" name="droid_type" required>
-                ${DROID_OPTIONS.map((opt) => `<option value="${esc(opt)}" ${editingItem && editingItem.droidType === opt ? 'selected' : ''}>${esc(opt)}</option>`).join('')}
+                ${droidTypeOptions(droidTypes, editingItem ? editingItem.droidType : '')}
               </select>
+            </div>
+            <div class="field">
+              <label for="droid_other_type">If you picked &quot;Other Build&quot; above <span style="font-weight:400; text-transform:none; letter-spacing:0;">(name the type here)</span></label>
+              <input type="text" id="droid_other_type" name="other_droid_type" maxlength="60" placeholder="e.g. Frankenbuild Astromech">
             </div>
             <div class="field">
               <label for="droid_name">Droid Name <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span></label>
@@ -1216,12 +1326,12 @@ function dashNav(active, currentUser) {
 </div>`;
 }
 
-function dashboardHTML({ tab, openEventId, editId, events, rsvps, addedDroids, users, buildLogs, logError, logNotice, galleryItems, galleryError, galleryNotice, droidShowcase, droidsError, droidsNotice, eventsError, eventsNotice, currentUser }) {
-  const content = tab === 'events' ? eventsTabHTML(events, rsvps, addedDroids, openEventId, eventsError, eventsNotice)
+function dashboardHTML({ tab, openEventId, editId, events, rsvps, addedDroids, users, buildLogs, logError, logNotice, galleryItems, galleryError, galleryNotice, droidShowcase, droidsError, droidsNotice, eventsError, eventsNotice, currentUser, droidTypes }) {
+  const content = tab === 'events' ? eventsTabHTML(events, rsvps, addedDroids, openEventId, eventsError, eventsNotice, droidTypes || [])
     : tab === 'directory' ? directoryTabHTML(users)
-    : tab === 'gallery' ? galleryTabHTML(galleryItems, currentUser, galleryError, galleryNotice, editId)
-    : tab === 'droids' ? droidsTabHTML(droidShowcase || [], currentUser, droidsError, droidsNotice, editId)
-    : logsTabHTML(buildLogs, currentUser, logError, logNotice, editId);
+    : tab === 'gallery' ? galleryTabHTML(galleryItems, currentUser, galleryError, galleryNotice, editId, events)
+    : tab === 'droids' ? droidsTabHTML(droidShowcase || [], currentUser, droidsError, droidsNotice, editId, droidTypes || [])
+    : logsTabHTML(buildLogs, currentUser, logError, logNotice, editId, droidTypes || []);
 
   return `<!doctype html>
 <html lang="en"><head>${HEAD}${PHOTO_EDITOR_HEAD}<title>Members Dashboard — Norwich Droids</title></head>
@@ -1335,6 +1445,7 @@ function adminPageHTML({ currentUser, users, error, notice, generated, editingUs
       <td>${esc(u.email)}</td>
       <td>${esc(u.droid || '—')}</td>
       <td>${u.role === 'admin' ? '<span class="role-badge">Admin</span>' : 'Member'}</td>
+      <td>${esc(formatDateTime(u.lastLoginAt))}</td>
       <td class="admin-actions">
         <a class="btn-small" href="/members/admin?edit=${encodeURIComponent(u.id)}">Edit</a>
         <form method="post" action="/members/admin/set-role">
@@ -1393,7 +1504,7 @@ ${dashNav('admin', currentUser)}
 
   <div class="admin-table-wrap">
     <table class="admin-table">
-      <thead><tr><th>Name</th><th>Email</th><th>Droid</th><th>Role</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Name</th><th>Email</th><th>Droid</th><th>Role</th><th>Last Login</th><th>Actions</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   </div>
@@ -1414,7 +1525,7 @@ document.querySelectorAll('form[action="/members/admin/delete"]').forEach((f) =>
 function eventFormFields(ev) {
   const e = ev || {
     id: '', day: '', daySmall: false, month: '', year: '', title: '', location: '', url: '',
-    startTime: '', accessTime: '', organiser: '', parking: '', floorArea: '', accommodation: '', fuel: '', description: '', baseDroids: [],
+    startTime: '', accessTime: '', organiser: '', parking: '', floorArea: '', accommodation: '', fuel: '', description: '', baseDroids: [], isPrivate: false,
   };
   const dateValues = eventDateInputValues(e);
   return `
@@ -1477,13 +1588,16 @@ function eventFormFields(ev) {
       <div class="field">
         <label for="ev_droids">Droids already confirmed &mdash; one per line, as <code>Name | Droid Type</code></label>
         <textarea id="ev_droids" name="base_droids" rows="4" placeholder="Jane Smith | R2 Unit">${esc(formatBaseDroids(e.baseDroids))}</textarea>
+      </div>
+      <div class="field field-checkbox">
+        <label><input type="checkbox" name="is_private" ${e.isPrivate ? 'checked' : ''}> Private event &mdash; hide this from the public Events page (still visible to members here)</label>
       </div>`;
 }
 
 function adminEventsHTML({ currentUser, events, pendingEvents, error, notice, editingEvent }) {
   const rows = events.map((ev) => `
     <tr>
-      <td>${esc(ev.title)}</td>
+      <td>${esc(ev.title)}${ev.isPrivate ? ' <span class="badge-private">Private</span>' : ''}</td>
       <td>${esc(ev.day)} ${esc(ev.month)}${ev.year ? ` ${esc(ev.year)}` : ''}</td>
       <td>${esc(ev.location)}</td>
       <td class="admin-actions">
@@ -1572,7 +1686,7 @@ document.querySelectorAll('form[action="/members/admin/events/reject"]').forEach
 </body></html>`;
 }
 
-function adminBuildLogsHTML({ currentUser, buildLogs, error, notice, editingLog }) {
+function adminBuildLogsHTML({ currentUser, buildLogs, error, notice, editingLog, droidTypes }) {
   const rows = buildLogs.map((p) => `
     <tr>
       <td>${p.hasPhoto ? `<div class="thumb" style="width:56px; height:56px; border-radius:4px;"><img src="/members/buildlog-photo/${esc(p.id)}?v=${esc(p.photoUpdatedAt || 0)}" alt=""></div>` : ''}</td>
@@ -1612,8 +1726,12 @@ ${dashNav('admin', currentUser)}
       <div class="field">
         <label for="log_droid_edit">Droid</label>
         <select id="log_droid_edit" name="droid" required>
-          ${DROID_OPTIONS.map((opt) => `<option value="${esc(opt)}" ${editingLog.droid === opt ? 'selected' : ''}>${esc(opt)}</option>`).join('')}
+          ${droidTypeOptions(droidTypes || [], editingLog.droid)}
         </select>
+      </div>
+      <div class="field">
+        <label for="log_other_droid_edit">If you picked &quot;Other Build&quot; above <span style="font-weight:400; text-transform:none; letter-spacing:0;">(name it here)</span></label>
+        <input type="text" id="log_other_droid_edit" name="other_droid" maxlength="60" placeholder="e.g. Frankenbuild Astromech">
       </div>
       <div class="field">
         <label for="log_caption_edit">Caption</label>
@@ -1644,11 +1762,19 @@ document.querySelectorAll('form[action="/members/admin/logs/delete"]').forEach((
 </body></html>`;
 }
 
-function adminGalleryHTML({ currentUser, galleryItems, error, notice }) {
-  const rows = galleryItems.map((g) => `
+function adminGalleryHTML({ currentUser, galleryItems, error, notice, events }) {
+  const eventById = new Map((events || []).map((ev) => [ev.id, ev]));
+  const rows = galleryItems.map((g) => {
+    let eventCell = '<span style="color:var(--muted);">General</span>';
+    if (g.eventId) {
+      const linkedEvent = eventById.get(g.eventId);
+      eventCell = linkedEvent ? esc(linkedEvent.title) : '<span style="color:var(--muted);">Deleted Event</span>';
+    }
+    return `
     <tr>
       <td><div class="thumb" style="width:64px; height:64px; border-radius:4px;"><img src="/public/gallery-photo/${esc(g.id)}" alt=""></div></td>
       <td>${esc(g.uploaderName)}</td>
+      <td>${eventCell}</td>
       <td style="white-space:normal; max-width:280px;">${g.caption ? esc(g.caption) : '<span style="color:var(--muted);">&mdash;</span>'}</td>
       <td class="admin-actions">
         <form method="post" action="/members/admin/gallery/delete" onsubmit="return false;" data-photo="${esc(g.uploaderName)}">
@@ -1656,7 +1782,8 @@ function adminGalleryHTML({ currentUser, galleryItems, error, notice }) {
           <button type="submit" class="btn-small btn-danger">Delete</button>
         </form>
       </td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 
   return `<!doctype html>
 <html lang="en"><head>${HEAD}<title>Admin · Gallery — Norwich Droids</title></head>
@@ -1672,8 +1799,8 @@ ${dashNav('admin', currentUser)}
 
   <div class="admin-table-wrap">
     <table class="admin-table">
-      <thead><tr><th>Photo</th><th>Uploaded By</th><th>Caption</th><th>Actions</th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="4">No photos yet.</td></tr>`}</tbody>
+      <thead><tr><th>Photo</th><th>Uploaded By</th><th>Event</th><th>Caption</th><th>Actions</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="5">No photos yet.</td></tr>`}</tbody>
     </table>
   </div>
 </div>
@@ -1690,7 +1817,14 @@ document.querySelectorAll('form[action="/members/admin/gallery/delete"]').forEac
 </body></html>`;
 }
 
-function adminDroidsHTML({ currentUser, droidShowcase, error, notice }) {
+function adminDroidsHTML({ currentUser, droidShowcase, error, notice, droidTypes }) {
+  const typeChips = (droidTypes || []).map((t) => `
+    <form method="post" action="/members/admin/droid-types/delete" onsubmit="return false;" data-type="${esc(t)}" style="display:inline-flex; align-items:center; gap:6px; background:var(--cream-panel); border:1px solid var(--border); border-radius:20px; padding:4px 6px 4px 12px; margin:0 8px 8px 0;">
+      <input type="hidden" name="type_name" value="${esc(t)}">
+      <span style="font-size:13px;">${esc(t)}</span>
+      <button type="submit" class="btn-small btn-danger" style="border-radius:50%; width:20px; height:20px; padding:0; line-height:1;" aria-label="Remove ${esc(t)}">&times;</button>
+    </form>`).join('');
+
   const rows = droidShowcase.map((d) => `
     <tr>
       <td><div class="thumb" style="width:64px; height:64px; border-radius:4px;"><img src="/public/droid-photo/${esc(d.id)}" alt=""></div></td>
@@ -1717,6 +1851,19 @@ ${dashNav('admin', currentUser)}
   ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
   ${notice ? `<div class="admin-success">${esc(notice)}</div>` : ''}
 
+  <div class="login-card" style="max-width:640px; margin:0 0 40px;">
+    <h1 style="font-size:16px; text-align:left;">Manage Droid Types</h1>
+    <p class="sub" style="margin-top:0;">These appear in the Droid dropdown on every member form. "Other Build" is always available and adds new types here automatically.</p>
+    <div style="margin-bottom:16px;">${typeChips || '<p class="sub">No droid types yet.</p>'}</div>
+    <form method="post" action="/members/admin/droid-types/add" style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
+      <div class="field" style="flex:1; min-width:220px; margin-bottom:0;">
+        <label for="new_type_name">Add a droid type</label>
+        <input type="text" id="new_type_name" name="type_name" maxlength="60" placeholder="e.g. Gonk Droid" required>
+      </div>
+      <button type="submit" class="btn btn-primary">Add</button>
+    </form>
+  </div>
+
   <div class="admin-table-wrap">
     <table class="admin-table">
       <thead><tr><th>Photo</th><th>Droid</th><th>Builder</th><th>Caption</th><th>Actions</th></tr></thead>
@@ -1725,6 +1872,14 @@ ${dashNav('admin', currentUser)}
   </div>
 </div>
 <script>
+document.querySelectorAll('form[action="/members/admin/droid-types/delete"]').forEach((f) => {
+  f.addEventListener('submit', () => {
+    if (confirm('Remove "' + f.dataset.type + '" from the droid type list?')) {
+      f.removeAttribute('onsubmit');
+      HTMLFormElement.prototype.submit.call(f);
+    }
+  });
+});
 document.querySelectorAll('form[action="/members/admin/droids/delete"]').forEach((f) => {
   f.addEventListener('submit', () => {
     if (confirm('Delete this photo of ' + f.dataset.photo + '? This cannot be undone.')) {
@@ -1792,10 +1947,48 @@ export default {
       });
     }
 
+    // Groups gallery photos into per-event "boxes" for the public Gallery
+    // page. Uses getEvents(env) directly (not /api/events) because that
+    // endpoint deliberately drops past events, and most gallery photos are
+    // added after the event they were taken at has already happened. A
+    // photo tagged to an event that's since been marked private, or one
+    // that's since been deleted, falls back to the General Photos bucket
+    // rather than disappearing — except a private event's photos, which are
+    // left out of the public feed entirely so the event isn't revealed via
+    // its photos.
     if (path === '/api/gallery' && request.method === 'GET') {
       const galleryItems = await getGalleryIndex(env);
-      const publicItems = galleryItems.map((g) => ({ id: g.id, uploaderName: g.uploaderName, caption: g.caption || '' }));
-      return new Response(JSON.stringify(publicItems), {
+      const events = await getEvents(env);
+      const eventById = new Map(events.map((ev) => [ev.id, ev]));
+      const publicPhoto = (g) => ({ id: g.id, uploaderName: g.uploaderName, caption: g.caption || '' });
+
+      const generalPhotos = [];
+      const photosByEventId = new Map();
+      for (const g of galleryItems) {
+        const linkedEvent = g.eventId ? eventById.get(g.eventId) : null;
+        if (g.eventId && linkedEvent && linkedEvent.isPrivate) continue; // private event — leave out of the public feed
+        if (!g.eventId || !linkedEvent) {
+          generalPhotos.push(g);
+          continue;
+        }
+        if (!photosByEventId.has(g.eventId)) photosByEventId.set(g.eventId, []);
+        photosByEventId.get(g.eventId).push(g);
+      }
+
+      const eventGroups = [...photosByEventId.entries()]
+        .map(([eventId, photos]) => ({ event: eventById.get(eventId), photos }))
+        .sort((a, b) => (eventSortIso(b.event) < eventSortIso(a.event) ? -1 : eventSortIso(b.event) > eventSortIso(a.event) ? 1 : 0))
+        .map(({ event, photos }) => ({
+          eventId: event.id, title: event.title, day: event.day || '', month: event.month || '', year: event.year || '',
+          photos: photos.map(publicPhoto),
+        }));
+
+      const groups = [...eventGroups];
+      if (generalPhotos.length > 0) {
+        groups.push({ eventId: '', title: 'General Photos', day: '', month: '', year: '', photos: generalPhotos.map(publicPhoto) });
+      }
+
+      return new Response(JSON.stringify(groups), {
         status: 200,
         headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
       });
@@ -1810,7 +2003,7 @@ export default {
       const events = await getEvents(env);
       const todayIso = new Date().toISOString().slice(0, 10);
       const publicEvents = events
-        .filter((e) => eventIsUpcoming(e, todayIso))
+        .filter((e) => eventIsUpcoming(e, todayIso) && !e.isPrivate)
         .sort((a, b) => (eventSortIso(a) < eventSortIso(b) ? -1 : eventSortIso(a) > eventSortIso(b) ? 1 : 0))
         .map((e) => ({
           day: e.day, daySmall: !!e.daySmall, month: e.month, year: e.year || '',
@@ -1826,6 +2019,22 @@ export default {
       const id = path.slice('/public/gallery-photo/'.length);
       const photo = await getGalleryPhotoBlob(env, id);
       if (!photo) return htmlResponse('Not found.', 404);
+      // A photo tagged to a private event stays out of the public Gallery
+      // page entirely (see /api/gallery above) — but its blob would still be
+      // fetchable by anyone who has the URL unless we check for that here
+      // too. Members can see the photo (and its URL) from their own Gallery
+      // tab since they can see private events there; this only blocks the
+      // route for a visitor with no session at all.
+      const galleryItems = await getGalleryIndex(env);
+      const item = galleryItems.find((g) => g.id === id);
+      if (item && item.eventId) {
+        const events = await getEvents(env);
+        const linkedEvent = events.find((e) => e.id === item.eventId);
+        if (linkedEvent && linkedEvent.isPrivate) {
+          const currentUser = await getSessionUser(request, env);
+          if (!currentUser) return htmlResponse('Not found.', 404);
+        }
+      }
       const bytes = base64ToBytes(photo.data);
       return new Response(bytes, {
         status: 200,
@@ -1915,6 +2124,7 @@ export default {
         const user = {
           id: crypto.randomUUID(), name, email, droid: '', role: 'admin', sessionVersion: 0,
           passwordSalt: saltHex, passwordHash: hash, createdAt: new Date().toISOString(),
+          lastLoginAt: Date.now(), // this account creation is effectively its first login
         };
         await saveUser(env, user);
         const token = await createSession(env, user);
@@ -1940,6 +2150,8 @@ export default {
         : await verifyPassword(password, UNKNOWN_EMAIL_DUMMY_SALT, UNKNOWN_EMAIL_DUMMY_HASH);
       if (user && password && passwordOk) {
         const token = await createSession(env, user);
+        user.lastLoginAt = Date.now();
+        await saveUser(env, user);
         return redirect('/members/dashboard', sessionCookieHeader(token));
       }
       return htmlResponse(loginPageHTML('That email and password combination is not right. Please try again.'), 401);
@@ -1964,8 +2176,9 @@ export default {
       const buildLogs = tab === 'logs' ? await getBuildLogs(env) : [];
       const galleryItems = tab === 'gallery' ? await getGalleryIndex(env) : [];
       const droidShowcase = tab === 'droids' ? await getDroidShowcase(env) : [];
+      const droidTypes = await getDroidTypes(env);
       return htmlResponse(dashboardHTML({
-        tab, openEventId: url.searchParams.get('open') || '', editId: url.searchParams.get('edit') || '', events, rsvps, addedDroids, users, buildLogs, galleryItems, droidShowcase,
+        tab, openEventId: url.searchParams.get('open') || '', editId: url.searchParams.get('edit') || '', events, rsvps, addedDroids, users, buildLogs, galleryItems, droidShowcase, droidTypes,
         eventsError: '', eventsNotice: '', droidsError: '', droidsNotice: '', currentUser,
       }));
     }
@@ -1991,9 +2204,9 @@ export default {
       const form = await request.formData();
       const eventId = String(form.get('event_id') || '');
       const name = String(form.get('name') || '').trim();
-      let droid = String(form.get('droid') || '');
+      const submittedDroid = String(form.get('droid') || '');
       const otherDroid = String(form.get('other_droid') || '').trim();
-      if (droid === 'Other Build' && otherDroid !== '') droid = otherDroid;
+      const droid = await resolveDroidType(env, submittedDroid, otherDroid);
 
       const events = await getEvents(env);
       if (events.some((e) => e.id === eventId) && name !== '' && droid !== '') {
@@ -2013,16 +2226,18 @@ export default {
         const buildLogs = await getBuildLogs(env);
         return htmlResponse(dashboardHTML({
           tab: 'logs', openEventId: '', events: [], rsvps: {}, addedDroids: {}, users: [],
-          buildLogs, logError, logNotice, galleryItems: [], currentUser,
+          buildLogs, logError, logNotice, galleryItems: [], currentUser, droidTypes: await getDroidTypes(env),
         }));
       };
 
       const form = await request.formData();
-      const droid = String(form.get('droid') || '').trim();
+      const submittedDroid = String(form.get('droid') || '').trim();
+      const otherDroid = String(form.get('other_droid') || '').trim();
       const caption = String(form.get('caption') || '').trim();
-      if (droid === '' || caption === '') {
+      if (submittedDroid === '' || caption === '') {
         return await renderWith('Please choose a droid and describe the update.', '');
       }
+      const droid = await resolveDroidType(env, submittedDroid, otherDroid);
 
       // The photo is optional — a plain text update with no file selected
       // skips all of this and posts exactly as it always has.
@@ -2081,13 +2296,14 @@ export default {
         const buildLogs = await getBuildLogs(env);
         return htmlResponse(dashboardHTML({
           tab: 'logs', openEventId: '', editId: editId || '', events: [], rsvps: {}, addedDroids: {}, users: [],
-          buildLogs, logError, logNotice, galleryItems: [], currentUser,
+          buildLogs, logError, logNotice, galleryItems: [], currentUser, droidTypes: await getDroidTypes(env),
         }));
       };
 
       const form = await request.formData();
       const logId = String(form.get('log_id') || '');
-      const droid = String(form.get('droid') || '').trim();
+      const submittedDroid = String(form.get('droid') || '').trim();
+      const otherDroid = String(form.get('other_droid') || '').trim();
       const caption = String(form.get('caption') || '').trim();
 
       const buildLogs = await getBuildLogs(env);
@@ -2098,9 +2314,10 @@ export default {
         return await renderWith('You can only edit your own posts.', '');
       }
 
-      if (droid === '' || caption === '') {
+      if (submittedDroid === '' || caption === '') {
         return await renderWith('Please choose a droid and describe the update.', '', logId);
       }
+      const droid = await resolveDroidType(env, submittedDroid, otherDroid);
 
       const file = form.get('photo');
       const hasFile = file && typeof file !== 'string' && file.size;
@@ -2136,43 +2353,64 @@ export default {
 
       const renderWith = async (galleryError, galleryNotice) => {
         const galleryItems = await getGalleryIndex(env);
+        const events = await getEvents(env);
         return htmlResponse(dashboardHTML({
-          tab: 'gallery', openEventId: '', events: [], rsvps: {}, addedDroids: {}, users: [], buildLogs: [],
-          galleryItems, galleryError, galleryNotice, currentUser,
+          tab: 'gallery', openEventId: '', events, rsvps: {}, addedDroids: {}, users: [], buildLogs: [],
+          galleryItems, galleryError, galleryNotice, currentUser, droidTypes: await getDroidTypes(env),
         }));
       };
 
       const form = await request.formData();
-      const file = form.get('photo');
+      // "photos" (plural) — a multi-select input, so more than one photo can
+      // go up in a single submission. All share the caption and event below.
+      const files = form.getAll('photos').filter((f) => f && typeof f !== 'string' && f.size);
       const caption = String(form.get('caption') || '').trim().slice(0, 140);
-      if (!file || typeof file === 'string' || !file.size) {
-        return await renderWith('Please choose a photo to upload.', '');
+      const events = await getEvents(env);
+      const requestedEventId = String(form.get('event_id') || '').trim();
+      const eventId = events.some((e) => e.id === requestedEventId) ? requestedEventId : '';
+
+      if (files.length === 0) {
+        return await renderWith('Please choose at least one photo to upload.', '');
       }
-      if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
-        return await renderWith('Photos must be JPEG, PNG, or WEBP.', '');
+      if (files.length > MAX_GALLERY_PHOTOS_PER_UPLOAD) {
+        return await renderWith(`Please upload up to ${MAX_GALLERY_PHOTOS_PER_UPLOAD} photos at a time.`, '');
       }
-      if (file.size > MAX_PHOTO_UPLOAD_BYTES) {
-        return await renderWith('That photo is too large to upload — please use a file under 8MB.', '');
+
+      // Validate EVERY file before saving ANY of them — one bad file in a
+      // big multi-select rejects the whole batch rather than leaving a
+      // half-uploaded mess for the member to figure out.
+      const prepared = [];
+      for (const file of files) {
+        if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
+          return await renderWith(`"${file.name}" isn't a JPEG, PNG, or WEBP photo.`, '');
+        }
+        if (file.size > MAX_PHOTO_UPLOAD_BYTES) {
+          return await renderWith(`"${file.name}" is too large to upload — please use files under 8MB.`, '');
+        }
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        if (!matchesDeclaredImageType(bytes, file.type)) {
+          return await renderWith(`"${file.name}" doesn't look like a valid image.`, '');
+        }
+        const result = await prepareUploadedPhoto(bytes, file.type);
+        if (result.errorMessage) {
+          return await renderWith(`"${file.name}": ${result.errorMessage}`, '');
+        }
+        prepared.push(result);
       }
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      if (!matchesDeclaredImageType(bytes, file.type)) {
-        return await renderWith("That file doesn't look like a valid image.", '');
-      }
-      const prepared = await prepareUploadedPhoto(bytes, file.type);
-      if (prepared.errorMessage) {
-        return await renderWith(prepared.errorMessage, '');
-      }
-      const id = crypto.randomUUID();
-      await saveGalleryPhotoBlob(env, id, prepared.contentType, bytesToBase64(prepared.bytes));
+
       const galleryItems = await getGalleryIndex(env);
-      // ownerId lets the uploader edit this later from the Gallery tab — see
-      // /members/gallery/update below. uploaderName is just a display label
-      // and can drift from ownerId if an admin renames the member.
-      galleryItems.unshift({ id, uploaderName: currentUser.name, caption, createdAt: new Date().toISOString(), ownerId: currentUser.id });
+      for (const p of prepared) {
+        const id = crypto.randomUUID();
+        await saveGalleryPhotoBlob(env, id, p.contentType, bytesToBase64(p.bytes));
+        // ownerId lets the uploader edit this later from the Gallery tab —
+        // see /members/gallery/update below. uploaderName is just a display
+        // label and can drift from ownerId if an admin renames the member.
+        galleryItems.unshift({ id, uploaderName: currentUser.name, caption, eventId, createdAt: new Date().toISOString(), ownerId: currentUser.id });
+      }
       await saveGalleryIndex(env, galleryItems);
       return htmlResponse(dashboardHTML({
-        tab: 'gallery', openEventId: '', events: [], rsvps: {}, addedDroids: {}, users: [], buildLogs: [],
-        galleryItems, galleryError: '', galleryNotice: 'Photo uploaded — now visible on the public Gallery page.', currentUser,
+        tab: 'gallery', openEventId: '', events, rsvps: {}, addedDroids: {}, users: [], buildLogs: [],
+        galleryItems, galleryError: '', galleryNotice: prepared.length === 1 ? 'Photo uploaded — now visible on the public Gallery page.' : `${prepared.length} photos uploaded — now visible on the public Gallery page.`, currentUser, droidTypes: await getDroidTypes(env),
       }));
     }
 
@@ -2183,15 +2421,19 @@ export default {
 
       const renderWith = async (galleryError, galleryNotice, editId) => {
         const galleryItems = await getGalleryIndex(env);
+        const events = await getEvents(env);
         return htmlResponse(dashboardHTML({
-          tab: 'gallery', openEventId: '', editId: editId || '', events: [], rsvps: {}, addedDroids: {}, users: [], buildLogs: [],
-          galleryItems, galleryError, galleryNotice, currentUser,
+          tab: 'gallery', openEventId: '', editId: editId || '', events, rsvps: {}, addedDroids: {}, users: [], buildLogs: [],
+          galleryItems, galleryError, galleryNotice, currentUser, droidTypes: await getDroidTypes(env),
         }));
       };
 
       const form = await request.formData();
       const photoId = String(form.get('photo_id') || '');
       const caption = String(form.get('caption') || '').trim().slice(0, 140);
+      const events = await getEvents(env);
+      const requestedEventId = String(form.get('event_id') || '').trim();
+      const eventId = events.some((e) => e.id === requestedEventId) ? requestedEventId : '';
 
       const galleryItems = await getGalleryIndex(env);
       const item = galleryItems.find((g) => g.id === photoId);
@@ -2222,6 +2464,7 @@ export default {
       }
 
       item.caption = caption;
+      item.eventId = eventId;
       await saveGalleryIndex(env, galleryItems);
       return await renderWith('', 'Photo updated.');
     }
@@ -2234,18 +2477,20 @@ export default {
         const droidShowcase = await getDroidShowcase(env);
         return htmlResponse(dashboardHTML({
           tab: 'droids', openEventId: '', events: [], rsvps: {}, addedDroids: {}, users: [], buildLogs: [],
-          galleryItems: [], droidShowcase, droidsError, droidsNotice, currentUser,
+          galleryItems: [], droidShowcase, droidsError, droidsNotice, currentUser, droidTypes: await getDroidTypes(env),
         }));
       };
 
       const form = await request.formData();
-      const droidType = String(form.get('droid_type') || '').trim();
+      const submittedDroidType = String(form.get('droid_type') || '').trim();
+      const otherDroidType = String(form.get('other_droid_type') || '').trim();
       const droidName = String(form.get('droid_name') || '').trim().slice(0, 60);
       const caption = String(form.get('caption') || '').trim().slice(0, 140);
       const file = form.get('photo');
-      if (!droidType) {
+      if (!submittedDroidType) {
         return await renderWith('Please choose a droid type.', '');
       }
+      const droidType = await resolveDroidType(env, submittedDroidType, otherDroidType);
       if (!file || typeof file === 'string' || !file.size) {
         return await renderWith('Please choose a photo to upload.', '');
       }
@@ -2272,7 +2517,7 @@ export default {
       await saveDroidShowcase(env, droidShowcase);
       return htmlResponse(dashboardHTML({
         tab: 'droids', openEventId: '', events: [], rsvps: {}, addedDroids: {}, users: [], buildLogs: [],
-        galleryItems: [], droidShowcase, droidsError: '', droidsNotice: 'Photo added — now visible on the public homepage.', currentUser,
+        galleryItems: [], droidShowcase, droidsError: '', droidsNotice: 'Photo added — now visible on the public homepage.', currentUser, droidTypes: await getDroidTypes(env),
       }));
     }
 
@@ -2285,13 +2530,14 @@ export default {
         const droidShowcase = await getDroidShowcase(env);
         return htmlResponse(dashboardHTML({
           tab: 'droids', openEventId: '', editId: editId || '', events: [], rsvps: {}, addedDroids: {}, users: [], buildLogs: [],
-          galleryItems: [], droidShowcase, droidsError, droidsNotice, currentUser,
+          galleryItems: [], droidShowcase, droidsError, droidsNotice, currentUser, droidTypes: await getDroidTypes(env),
         }));
       };
 
       const form = await request.formData();
       const droidId = String(form.get('droid_id') || '');
-      const droidType = String(form.get('droid_type') || '').trim();
+      const submittedDroidType = String(form.get('droid_type') || '').trim();
+      const otherDroidType = String(form.get('other_droid_type') || '').trim();
       const droidName = String(form.get('droid_name') || '').trim().slice(0, 60);
       const caption = String(form.get('caption') || '').trim().slice(0, 140);
 
@@ -2303,9 +2549,10 @@ export default {
         return await renderWith('You can only edit your own droid entry.', '');
       }
 
-      if (!droidType) {
+      if (!submittedDroidType) {
         return await renderWith('Please choose a droid type.', '', droidId);
       }
+      const droidType = await resolveDroidType(env, submittedDroidType, otherDroidType);
 
       const file = form.get('photo');
       const hasFile = file && typeof file !== 'string' && file.size;
@@ -2346,7 +2593,7 @@ export default {
         const addedDroids = await readJSON(env, 'droids');
         return htmlResponse(dashboardHTML({
           tab: 'events', openEventId: '', events, rsvps, addedDroids, users: [], buildLogs: [],
-          galleryItems: [], eventsError, eventsNotice, currentUser,
+          galleryItems: [], eventsError, eventsNotice, currentUser, droidTypes: await getDroidTypes(env),
         }));
       };
 
@@ -2667,6 +2914,7 @@ export default {
           fuel: String(form.get('fuel') || '').trim(),
           description: String(form.get('description') || '').trim(),
           baseDroids: parseBaseDroids(form.get('base_droids')),
+          isPrivate: form.get('is_private') === 'on',
         };
         events.push(newEvent);
         await saveEvents(env, events);
@@ -2701,6 +2949,7 @@ export default {
           fuel: String(form.get('fuel') || '').trim(),
           description: String(form.get('description') || '').trim(),
           baseDroids: parseBaseDroids(form.get('base_droids')),
+          isPrivate: form.get('is_private') === 'on',
         };
         await saveEvents(env, events);
         return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents, error: '', notice: `"${events[idx].title}" was updated.`, editingEvent: null }));
@@ -2767,28 +3016,32 @@ export default {
 
       if (path === '/members/admin/logs' && request.method === 'GET') {
         const buildLogs = await getBuildLogs(env);
+        const droidTypes = await getDroidTypes(env);
         const editId = url.searchParams.get('edit');
         const editingLog = editId ? buildLogs.find((p) => p.id === editId) || null : null;
-        return htmlResponse(adminBuildLogsHTML({ currentUser, buildLogs, error: '', notice: '', editingLog }));
+        return htmlResponse(adminBuildLogsHTML({ currentUser, buildLogs, error: '', notice: '', editingLog, droidTypes }));
       }
 
       if (path === '/members/admin/logs/update' && request.method === 'POST') {
         const form = await request.formData();
         const logId = String(form.get('log_id') || '');
         const buildLogs = await getBuildLogs(env);
+        const droidTypes = await getDroidTypes(env);
         const idx = buildLogs.findIndex((p) => p.id === logId);
         if (idx === -1) {
-          return htmlResponse(adminBuildLogsHTML({ currentUser, buildLogs, error: 'Post not found.', notice: '', editingLog: null }), 400);
+          return htmlResponse(adminBuildLogsHTML({ currentUser, buildLogs, error: 'Post not found.', notice: '', editingLog: null, droidTypes }), 400);
         }
         const author = String(form.get('author') || '').trim();
-        const droid = String(form.get('droid') || '').trim();
+        const submittedDroid = String(form.get('droid') || '').trim();
+        const otherDroid = String(form.get('other_droid') || '').trim();
         const caption = String(form.get('caption') || '').trim();
-        if (!author || !droid || !caption) {
-          return htmlResponse(adminBuildLogsHTML({ currentUser, buildLogs, error: 'Author, droid, and caption are all required.', notice: '', editingLog: buildLogs[idx] }), 400);
+        if (!author || !submittedDroid || !caption) {
+          return htmlResponse(adminBuildLogsHTML({ currentUser, buildLogs, error: 'Author, droid, and caption are all required.', notice: '', editingLog: buildLogs[idx], droidTypes }), 400);
         }
+        const droid = await resolveDroidType(env, submittedDroid, otherDroid);
         buildLogs[idx] = { ...buildLogs[idx], author, droid, caption };
         await saveBuildLogs(env, buildLogs);
-        return htmlResponse(adminBuildLogsHTML({ currentUser, buildLogs, error: '', notice: 'Post updated.', editingLog: null }));
+        return htmlResponse(adminBuildLogsHTML({ currentUser, buildLogs, error: '', notice: 'Post updated.', editingLog: null, droidTypes: await getDroidTypes(env) }));
       }
 
       if (path === '/members/admin/logs/delete' && request.method === 'POST') {
@@ -2797,56 +3050,93 @@ export default {
         const buildLogs = await getBuildLogs(env);
         const target = buildLogs.find((p) => p.id === logId);
         if (!target) {
-          return htmlResponse(adminBuildLogsHTML({ currentUser, buildLogs, error: 'Post not found.', notice: '', editingLog: null }), 400);
+          return htmlResponse(adminBuildLogsHTML({ currentUser, buildLogs, error: 'Post not found.', notice: '', editingLog: null, droidTypes: await getDroidTypes(env) }), 400);
         }
         const remaining = buildLogs.filter((p) => p.id !== logId);
         await saveBuildLogs(env, remaining);
         if (target.hasPhoto) {
           await deleteBuildLogPhoto(env, logId);
         }
-        return htmlResponse(adminBuildLogsHTML({ currentUser, buildLogs: remaining, error: '', notice: 'Post deleted.', editingLog: null }));
+        return htmlResponse(adminBuildLogsHTML({ currentUser, buildLogs: remaining, error: '', notice: 'Post deleted.', editingLog: null, droidTypes: await getDroidTypes(env) }));
       }
 
       // --- Gallery moderation -------------------------------------------
 
       if (path === '/members/admin/gallery' && request.method === 'GET') {
         const galleryItems = await getGalleryIndex(env);
-        return htmlResponse(adminGalleryHTML({ currentUser, galleryItems, error: '', notice: '' }));
+        const events = await getEvents(env);
+        return htmlResponse(adminGalleryHTML({ currentUser, galleryItems, error: '', notice: '', events }));
       }
 
       if (path === '/members/admin/gallery/delete' && request.method === 'POST') {
         const form = await request.formData();
         const photoId = String(form.get('photo_id') || '');
         const galleryItems = await getGalleryIndex(env);
+        const events = await getEvents(env);
         const target = galleryItems.find((g) => g.id === photoId);
         if (!target) {
-          return htmlResponse(adminGalleryHTML({ currentUser, galleryItems, error: 'Photo not found.', notice: '' }), 400);
+          return htmlResponse(adminGalleryHTML({ currentUser, galleryItems, error: 'Photo not found.', notice: '', events }), 400);
         }
         const remaining = galleryItems.filter((g) => g.id !== photoId);
         await saveGalleryIndex(env, remaining);
         await deleteGalleryPhotoBlob(env, photoId);
-        return htmlResponse(adminGalleryHTML({ currentUser, galleryItems: remaining, error: '', notice: 'Photo deleted.' }));
+        return htmlResponse(adminGalleryHTML({ currentUser, galleryItems: remaining, error: '', notice: 'Photo deleted.', events }));
       }
 
       // --- Droid showcase moderation -------------------------------------
 
       if (path === '/members/admin/droids' && request.method === 'GET') {
         const droidShowcase = await getDroidShowcase(env);
-        return htmlResponse(adminDroidsHTML({ currentUser, droidShowcase, error: '', notice: '' }));
+        const droidTypes = await getDroidTypes(env);
+        return htmlResponse(adminDroidsHTML({ currentUser, droidShowcase, error: '', notice: '', droidTypes }));
       }
 
       if (path === '/members/admin/droids/delete' && request.method === 'POST') {
         const form = await request.formData();
         const droidId = String(form.get('droid_id') || '');
         const droidShowcase = await getDroidShowcase(env);
+        const droidTypes = await getDroidTypes(env);
         const target = droidShowcase.find((d) => d.id === droidId);
         if (!target) {
-          return htmlResponse(adminDroidsHTML({ currentUser, droidShowcase, error: 'Photo not found.', notice: '' }), 400);
+          return htmlResponse(adminDroidsHTML({ currentUser, droidShowcase, error: 'Photo not found.', notice: '', droidTypes }), 400);
         }
         const remaining = droidShowcase.filter((d) => d.id !== droidId);
         await saveDroidShowcase(env, remaining);
         await deleteDroidShowcasePhoto(env, droidId);
-        return htmlResponse(adminDroidsHTML({ currentUser, droidShowcase: remaining, error: '', notice: 'Photo deleted.' }));
+        return htmlResponse(adminDroidsHTML({ currentUser, droidShowcase: remaining, error: '', notice: 'Photo deleted.', droidTypes }));
+      }
+
+      if (path === '/members/admin/droid-types/add' && request.method === 'POST') {
+        const form = await request.formData();
+        const droidShowcase = await getDroidShowcase(env);
+        const typeName = String(form.get('type_name') || '').trim().slice(0, 60);
+        const droidTypes = await getDroidTypes(env);
+        if (!typeName) {
+          return htmlResponse(adminDroidsHTML({ currentUser, droidShowcase, error: 'Enter a droid type name.', notice: '', droidTypes }), 400);
+        }
+        if (typeName.toLowerCase() === OTHER_DROID_TYPE.toLowerCase()) {
+          return htmlResponse(adminDroidsHTML({ currentUser, droidShowcase, error: '"Other Build" is already available on every form — no need to add it.', notice: '', droidTypes }), 400);
+        }
+        const alreadyListed = droidTypes.some((t) => t.toLowerCase() === typeName.toLowerCase());
+        if (alreadyListed) {
+          return htmlResponse(adminDroidsHTML({ currentUser, droidShowcase, error: `"${typeName}" is already in the list.`, notice: '', droidTypes }), 400);
+        }
+        droidTypes.push(typeName);
+        await saveDroidTypes(env, droidTypes);
+        return htmlResponse(adminDroidsHTML({ currentUser, droidShowcase, error: '', notice: `"${typeName}" was added to the droid type list.`, droidTypes }));
+      }
+
+      if (path === '/members/admin/droid-types/delete' && request.method === 'POST') {
+        const form = await request.formData();
+        const droidShowcase = await getDroidShowcase(env);
+        const typeName = String(form.get('type_name') || '').trim();
+        const droidTypes = await getDroidTypes(env);
+        if (!droidTypes.includes(typeName)) {
+          return htmlResponse(adminDroidsHTML({ currentUser, droidShowcase, error: 'Droid type not found.', notice: '', droidTypes }), 400);
+        }
+        const remaining = droidTypes.filter((t) => t !== typeName);
+        await saveDroidTypes(env, remaining);
+        return htmlResponse(adminDroidsHTML({ currentUser, droidShowcase, error: '', notice: `"${typeName}" was removed from the droid type list.`, droidTypes: remaining }));
       }
 
       return htmlResponse('Not found.', 404);
