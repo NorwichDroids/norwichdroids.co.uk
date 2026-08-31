@@ -215,7 +215,13 @@ itself — no dashboard steps needed:
     tied to any event). Tagged photos then show up immediately on the
     PUBLIC Gallery page, grouped into a separate box per event (with the
     event's date shown), plus a "General Photos" box last for anything not
-    tagged to an event — no login needed to view any of it. Same as profile
+    tagged to an event — no login needed to view any of it. The Gallery tab
+    inside the Members Area is grouped into the same kind of per-event boxes
+    too, so members see their photos organised exactly like the public page
+    does — with one difference: a private event's box (see "Private event"
+    below) still shows up here with a "Private" badge, since members can
+    already see private events on their own Events tab; it's only left out
+    of the public Gallery page. Same as profile
     photos, an oversized photo is automatically shrunk to fit rather than
     rejected. Each photo shows an "Edit" link to whoever uploaded it, so
     they can change the caption, re-tag it to a different event, or swap
@@ -244,10 +250,13 @@ itself — no dashboard steps needed:
     browser before the file is submitted — drag/resize the crop box, use
     the rotate buttons if the photo's sideways, then "Use This Photo". This
     is entirely optional to use well: if you'd rather not crop, just leave
-    the default framing and submit as normal. If this editor ever fails to
-    load (e.g. no internet connection to the small library it uses),
-    photo uploads simply behave as a plain file picker instead — nothing
-    stops working.
+    the default framing and submit as normal. On the Gallery's "Add Photos"
+    form specifically, this only kicks in when you pick a single photo —
+    select several at once for a batch upload and it skips straight to a
+    plain multi-file upload, since cropping only ever makes sense for one
+    photo at a time. If this editor ever fails to load (e.g. no internet
+    connection to the small library it uses), photo uploads simply behave
+    as a plain file picker instead — nothing stops working.
 
 
 4. POINT norwichdroids.co.uk AT THIS SITE
