@@ -288,6 +288,16 @@ Cloudflare manages the whole chain itself once this is done.
 Until this is done, the workers.dev URL from step 1(f) works as a fully
 functional preview of the real site.
 
+A NOTE ON HTTP -> HTTPS: the site forces every request onto HTTPS itself,
+in code — visiting the plain http:// version of any page (custom domain or
+workers.dev) redirects straight to the same page under https://, before
+anything else runs. This means it doesn't rely on the Cloudflare
+dashboard's own "Always Use HTTPS" toggle (SSL/TLS -> Edge Certificates)
+being switched on, though that's also worth turning on once the domain is
+connected, since it applies at Cloudflare's edge even faster (before the
+request reaches this Worker at all) — the two do the same thing and
+having both is fine, not conflicting.
+
 
 5. EDITING CONTENT
 --------------------
