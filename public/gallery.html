@@ -33,7 +33,7 @@
 </div>
 
 <div class="container" style="padding-bottom:100px;">
-  <div class="gallery-grid" id="gallery-grid">
+  <div id="gallery-groups">
     <p class="sub">Loading photos&hellip;</p>
   </div>
 </div>
@@ -48,7 +48,7 @@
 
 <script>
 (function () {
-  var grid = document.getElementById('gallery-grid');
+  var groupsEl = document.getElementById('gallery-groups');
   var lightbox = document.getElementById('lightbox');
   var lightboxImg = document.getElementById('lightbox-img');
   var lightboxCaption = document.getElementById('lightbox-caption');
@@ -74,46 +74,75 @@
   });
 
   function showMessage(text) {
-    grid.innerHTML = '';
+    groupsEl.innerHTML = '';
     var p = document.createElement('p');
     p.className = 'sub';
     p.textContent = text;
-    grid.appendChild(p);
+    groupsEl.appendChild(p);
+  }
+
+  function buildCard(g) {
+    var card = document.createElement('div');
+    card.className = 'card';
+
+    var captionText = g.caption ? (g.caption + ' · ' + g.uploaderName) : g.uploaderName;
+
+    var thumb = document.createElement('div');
+    thumb.className = 'thumb';
+    var img = document.createElement('img');
+    img.src = '/public/gallery-photo/' + encodeURIComponent(g.id);
+    img.alt = g.caption || g.uploaderName || '';
+    img.loading = 'lazy';
+    thumb.appendChild(img);
+    thumb.addEventListener('click', function () {
+      openLightbox(img.src, img.alt, captionText);
+    });
+    card.appendChild(thumb);
+
+    var caption = document.createElement('div');
+    caption.className = 'caption';
+    caption.textContent = captionText;
+    card.appendChild(caption);
+
+    return card;
   }
 
   fetch('/api/gallery').then(function (r) {
     if (!r.ok) throw new Error('bad response');
     return r.json();
-  }).then(function (photos) {
-    if (!Array.isArray(photos) || photos.length === 0) {
+  }).then(function (groups) {
+    if (!Array.isArray(groups) || groups.length === 0) {
       showMessage('No photos yet — members can add some from the Gallery tab in the Members Area.');
       return;
     }
-    grid.innerHTML = '';
-    photos.forEach(function (g) {
-      var card = document.createElement('div');
-      card.className = 'card';
+    groupsEl.innerHTML = '';
+    groups.forEach(function (group) {
+      var section = document.createElement('section');
+      section.className = 'gallery-event-group';
 
-      var captionText = g.caption ? (g.caption + ' · ' + g.uploaderName) : g.uploaderName;
+      var heading = document.createElement('div');
+      heading.className = 'gallery-event-heading';
+      var h2 = document.createElement('h2');
+      h2.textContent = group.title || 'General Photos';
+      heading.appendChild(h2);
 
-      var thumb = document.createElement('div');
-      thumb.className = 'thumb';
-      var img = document.createElement('img');
-      img.src = '/public/gallery-photo/' + encodeURIComponent(g.id);
-      img.alt = g.caption || g.uploaderName || '';
-      img.loading = 'lazy';
-      thumb.appendChild(img);
-      thumb.addEventListener('click', function () {
-        openLightbox(img.src, img.alt, captionText);
+      var dateParts = [group.day, group.month, group.year].filter(Boolean).join(' ');
+      if (dateParts) {
+        var dateEl = document.createElement('div');
+        dateEl.className = 'date';
+        dateEl.textContent = dateParts;
+        heading.appendChild(dateEl);
+      }
+      section.appendChild(heading);
+
+      var grid = document.createElement('div');
+      grid.className = 'gallery-grid';
+      (group.photos || []).forEach(function (g) {
+        grid.appendChild(buildCard(g));
       });
-      card.appendChild(thumb);
+      section.appendChild(grid);
 
-      var caption = document.createElement('div');
-      caption.className = 'caption';
-      caption.textContent = captionText;
-      card.appendChild(caption);
-
-      grid.appendChild(card);
+      groupsEl.appendChild(section);
     });
   }).catch(function () {
     showMessage('Photos are unavailable right now.');
