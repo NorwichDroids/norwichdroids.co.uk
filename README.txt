@@ -116,7 +116,11 @@ itself — no dashboard steps needed:
     should know, and the droids already confirmed for it). The date is
     picked from a real calendar widget rather than typed in — pick just a
     start date for a single-day event, or also fill in an end date for a
-    multi-day one. Event Website, Start Time, Access Time, Organiser, and
+    multi-day one. Past dates are fully supported too, e.g. to log an event
+    that already happened purely so photos can be tagged to it in the
+    Gallery — the date picker doesn't stop you picking an old date, and it
+    just won't show up on the public Events page once its date has passed
+    (see below). Event Website, Start Time, Access Time, Organiser, and
     the description are all optional — leave any of them blank and that
     part just doesn't show. Deleting an event also clears any
     RSVPs/added-droids that were logged against it.
@@ -196,11 +200,17 @@ itself — no dashboard steps needed:
     on the About page at all — there are no placeholder/fake members, only
     real registered members who exist show up, and only once they exist.
   - Every member can add photos from the Gallery tab (JPEG, PNG, or WEBP) —
-    and can select several files at once to upload them all together (up to
-    10 per submission), sharing one caption. If anything in a multi-photo
-    batch fails (wrong file type, too large, etc.), the whole batch is
-    rejected together and nothing from it is saved, rather than uploading
-    some and silently dropping others. Each upload can optionally be tagged
+    and can select a few files at once to upload them all together (up to 4
+    per submission), sharing one caption. This is kept to a small number on
+    purpose: resizing a large photo runs through a CPU-heavy step, and
+    Cloudflare Workers only allow a limited amount of CPU time per request
+    (very little on the Free plan) — a bigger batch of full-size phone
+    photos risks the request being cut off with a resource-limit error, so
+    the cap keeps a batch upload roughly as safe as any single-photo
+    upload. If anything in a multi-photo batch fails (wrong file type, too
+    large, etc.), the whole batch is rejected together and nothing from it
+    is saved, rather than uploading some and silently dropping others. Each
+    upload can optionally be tagged
     to one of the events on the calendar (or left as a general photo, not
     tied to any event). Tagged photos then show up immediately on the
     PUBLIC Gallery page, grouped into a separate box per event (with the
@@ -428,6 +438,18 @@ need to do. If that package were ever somehow unavailable, the site
 doesn't break: uploads just go back to being rejected with a "please use
 one under 1.5MB" message instead of being resized, exactly like before
 this feature existed.
+
+A NOTE ON "Error 1102: Worker exceeded resource limits" — if you ever see
+this while uploading a photo (single or multi-photo), it means resizing
+that photo used more CPU time than your Cloudflare plan allows in one
+request. The Workers Free plan gives a request only 10ms of CPU time,
+which is a very tight budget for image resizing; the Workers Paid plan
+($5/month) raises this to 30 seconds by default — comfortably enough for
+resizing several full-size phone photos. If this happens regularly, the
+Workers Paid plan is the real fix; the Gallery's multi-photo upload cap is
+deliberately kept low (4 photos per batch) to keep this unlikely even on
+the Free plan, but a single very large or high-resolution photo can still
+occasionally be enough on its own.
 
 The in-browser crop-and-rotate tool on photo uploads (My Account, Gallery,
 Build Logs, Our Droids) is a separate thing from the resizing above — it
