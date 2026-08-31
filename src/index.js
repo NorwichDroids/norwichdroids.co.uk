@@ -1081,11 +1081,11 @@ function eventsTabHTML(events, rsvps, addedDroids, openEventId, error, notice, d
             </div>
             <div class="field">
               <label for="sub_date_start">Event Date</label>
-              <input type="date" id="sub_date_start" name="date_start" required>
+              <input type="date" id="sub_date_start" name="date_start" min="2000-01-01" required>
             </div>
             <div class="field">
               <label for="sub_date_end">End Date <span style="font-weight:400;">(optional)</span></label>
-              <input type="date" id="sub_date_end" name="date_end">
+              <input type="date" id="sub_date_end" name="date_end" min="2000-01-01">
             </div>
             <div class="field">
               <label for="sub_location">Location</label>
@@ -1535,12 +1535,12 @@ function eventFormFields(ev) {
       </div>
       <div class="field-row">
         <div class="field">
-          <label for="ev_date_start">Event Date</label>
-          <input type="date" id="ev_date_start" name="date_start" value="${esc(dateValues.start)}" required>
+          <label for="ev_date_start">Event Date <span style="font-weight:400; text-transform:none; letter-spacing:0;">(past dates are fine too — for logging an event you're adding photos of)</span></label>
+          <input type="date" id="ev_date_start" name="date_start" min="2000-01-01" value="${esc(dateValues.start)}" required>
         </div>
         <div class="field">
           <label for="ev_date_end">End Date <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional, for multi-day events)</span></label>
-          <input type="date" id="ev_date_end" name="date_end" value="${esc(dateValues.end)}">
+          <input type="date" id="ev_date_end" name="date_end" min="2000-01-01" value="${esc(dateValues.end)}">
         </div>
       </div>
       <div class="field">
