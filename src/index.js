@@ -165,7 +165,17 @@ const MAX_PHOTO_BYTES = 1.5 * 1024 * 1024; // 1.5MB — the size a photo must fi
 const MAX_PHOTO_UPLOAD_BYTES = 8 * 1024 * 1024; // hard ceiling on the RAW file a member selects, before any resizing is attempted
 const MAX_PHOTO_DIMENSION = 1600; // longest edge, in pixels, once resized
 const ALLOWED_PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
-const MAX_GALLERY_PHOTOS_PER_UPLOAD = 10; // cap on a single multi-select Gallery upload
+// Cap on a single multi-select Gallery upload. Kept deliberately low —
+// resizing an oversized photo runs through a CPU-heavy WASM image library
+// (see prepareUploadedPhoto/resizePhotoToFit below), and Cloudflare Workers
+// enforce a hard CPU-time budget per request (as little as 10ms on the Free
+// plan). A big multi-select of full-resolution phone photos, each needing a
+// resize, can add up to more CPU work than a single request is allowed —
+// which is exactly what "Error 1102: Worker exceeded resource limits" means.
+// A small cap keeps the worst case (every file in the batch oversized) from
+// multiplying that cost too far past what a single-photo upload already
+// costs.
+const MAX_GALLERY_PHOTOS_PER_UPLOAD = 4;
 
 function esc(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({
