@@ -267,6 +267,9 @@ h1, h2, h3, .display {
 /* Our Droids (public homepage) — show the whole photo within the box rather than cropping it */
 #droid-grid .thumb img { object-fit: contain; background: var(--cream-panel); }
 
+/* Meet the Members (public About page) — same "show the whole photo" fix as Our Droids above */
+#member-grid .thumb img { object-fit: contain; background: var(--cream-panel); }
+
 .card .body { padding: 18px 20px; }
 .card .body h4 { font-family: 'Exo 2', sans-serif; font-weight: 700; font-size: 15px; margin: 0 0 6px; }
 .card .body p { font-size: 13.5px; color: var(--text); line-height: 1.5; margin: 0; }
@@ -282,6 +285,19 @@ h1, h2, h3, .display {
 .gallery-grid .thumb img { transition: transform 0.2s ease; }
 .gallery-grid .thumb:hover img { transform: scale(1.04); }
 .gallery-grid .caption { padding: 12px 16px; font-size: 13px; color: var(--text); }
+
+/* Public Gallery page — photos grouped into a bordered "box" per event,
+   plus a trailing "General Photos" box for anything not tied to one. */
+.gallery-event-group {
+  background: var(--card); border: 1px solid var(--border); border-radius: 4px;
+  padding: 28px 28px 32px; margin: 0 0 32px;
+}
+.gallery-event-heading { margin: 0 0 20px; }
+.gallery-event-heading h2 {
+  font-family: 'Exo 2', sans-serif; font-weight: 700; font-size: 19px; margin: 0 0 4px; color: var(--text);
+}
+.gallery-event-heading .date { font-size: 13px; color: var(--muted); }
+.gallery-event-group .gallery-grid { gap: 18px; }
 
 /* Gallery lightbox — click a photo to see it larger */
 .lightbox {
@@ -546,6 +562,11 @@ details[open] .details-toggle svg { transform: rotate(180deg); }
 
 .role-badge {
   display: inline-block; background: var(--accent); color: var(--on-accent); font-size: 10.5px; font-weight: 700;
+  letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 7px; border-radius: 3px; vertical-align: middle;
+}
+
+.badge-private {
+  display: inline-block; background: #8a4a3a; color: #fff; font-size: 10.5px; font-weight: 700;
   letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 7px; border-radius: 3px; vertical-align: middle;
 }
 
