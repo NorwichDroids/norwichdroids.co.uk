@@ -685,6 +685,40 @@ function eventPickerOptions(events, selectedEventId) {
   return `<option value=""${generalSelected}>General Photos (not tied to an event)</option>` + eventOptions;
 }
 
+// Groups gallery items into per-event "boxes", most-recent-event first,
+// with a trailing General group for anything not tied to an event (or
+// tied to one that's since been deleted). Shared by the public /api/gallery
+// endpoint (which additionally drops private-event groups — see the
+// excludePrivate option) and the members-area Gallery tab, which shows
+// every event including private ones, since members can see those anyway.
+// Returns an array of { event: <event object, or null for General>, photos }.
+function groupGalleryItemsByEvent(galleryItems, events, { excludePrivate = false } = {}) {
+  const eventById = new Map((events || []).map((ev) => [ev.id, ev]));
+  const generalPhotos = [];
+  const photosByEventId = new Map();
+
+  for (const g of galleryItems) {
+    const linkedEvent = g.eventId ? eventById.get(g.eventId) : null;
+    if (excludePrivate && g.eventId && linkedEvent && linkedEvent.isPrivate) continue;
+    if (!g.eventId || !linkedEvent) {
+      generalPhotos.push(g);
+      continue;
+    }
+    if (!photosByEventId.has(g.eventId)) photosByEventId.set(g.eventId, []);
+    photosByEventId.get(g.eventId).push(g);
+  }
+
+  const eventGroups = [...photosByEventId.entries()]
+    .map(([eventId, photos]) => ({ event: eventById.get(eventId), photos }))
+    .sort((a, b) => (eventSortIso(b.event) < eventSortIso(a.event) ? -1 : eventSortIso(b.event) > eventSortIso(a.event) ? 1 : 0));
+
+  const groups = [...eventGroups];
+  if (generalPhotos.length > 0) {
+    groups.push({ event: null, photos: generalPhotos });
+  }
+  return groups;
+}
+
 function slugify(str) {
   return String(str).toLowerCase().trim()
     .replace(/[^a-z0-9]+/g, '-')
@@ -1206,19 +1240,25 @@ function logsTabHTML(buildLogs, currentUser, error, notice, editId, droidTypes) 
 function galleryTabHTML(galleryItems, currentUser, error, notice, editId, events) {
   // Same owner-only edit rule as build logs above.
   const editingItem = editId ? galleryItems.find((g) => g.id === editId && g.ownerId === currentUser.id) : null;
-  const eventById = new Map((events || []).map((ev) => [ev.id, ev]));
+
+  // Same per-event "boxes" the public Gallery page uses, so members see
+  // their photos organised the same way visitors do — except every event
+  // is shown here, private ones included, since members can already see
+  // those on their Events tab.
+  const photoCard = (g) => `
+      <div class="card">
+        <div class="thumb"><img src="/public/gallery-photo/${esc(g.id)}" alt="${esc(g.caption || g.uploaderName)}"></div>
+        <div class="caption">${g.caption ? `${esc(g.caption)} &middot; ` : ''}${esc(g.uploaderName)}${g.ownerId === currentUser.id ? ` &middot; <a href="/members/dashboard?tab=gallery&edit=${encodeURIComponent(g.id)}">Edit</a>` : ''}</div>
+      </div>`;
 
   const photos = galleryItems.length === 0
     ? `<p class="sub">No photos yet — be the first to share one with the form on the right.</p>`
-    : `<div class="gallery-grid">${galleryItems.map((g) => {
-      const linkedEvent = g.eventId ? eventById.get(g.eventId) : null;
-      const eventNote = linkedEvent ? ` &middot; <span style="color:var(--muted);">${esc(linkedEvent.title)}</span>` : '';
-      return `
-      <div class="card">
-        <div class="thumb"><img src="/public/gallery-photo/${esc(g.id)}" alt="${esc(g.caption || g.uploaderName)}"></div>
-        <div class="caption">${g.caption ? `${esc(g.caption)} &middot; ` : ''}${esc(g.uploaderName)}${eventNote}${g.ownerId === currentUser.id ? ` &middot; <a href="/members/dashboard?tab=gallery&edit=${encodeURIComponent(g.id)}">Edit</a>` : ''}</div>
-      </div>`;
-    }).join('')}</div>`;
+    : groupGalleryItemsByEvent(galleryItems, events).map(({ event, photos: groupPhotos }) => {
+      const heading = event
+        ? `<div class="gallery-event-heading"><h2>${esc(event.title)}${event.isPrivate ? ' <span class="badge-private">Private</span>' : ''}</h2>${[event.day, event.month, event.year].filter(Boolean).join(' ') ? `<div class="date">${esc([event.day, event.month, event.year].filter(Boolean).join(' '))}</div>` : ''}</div>`
+        : `<div class="gallery-event-heading"><h2>General Photos</h2></div>`;
+      return `<section class="gallery-event-group">${heading}<div class="gallery-grid">${groupPhotos.map(photoCard).join('')}</div></section>`;
+    }).join('');
 
   const formTitle = editingItem ? 'Edit Your Photo' : 'Add Photos';
   const formAction = editingItem ? '/members/gallery/update' : '/members/gallery/upload';
@@ -2003,34 +2043,16 @@ export default {
     if (path === '/api/gallery' && request.method === 'GET') {
       const galleryItems = await getGalleryIndex(env);
       const events = await getEvents(env);
-      const eventById = new Map(events.map((ev) => [ev.id, ev]));
       const publicPhoto = (g) => ({ id: g.id, uploaderName: g.uploaderName, caption: g.caption || '' });
 
-      const generalPhotos = [];
-      const photosByEventId = new Map();
-      for (const g of galleryItems) {
-        const linkedEvent = g.eventId ? eventById.get(g.eventId) : null;
-        if (g.eventId && linkedEvent && linkedEvent.isPrivate) continue; // private event — leave out of the public feed
-        if (!g.eventId || !linkedEvent) {
-          generalPhotos.push(g);
-          continue;
-        }
-        if (!photosByEventId.has(g.eventId)) photosByEventId.set(g.eventId, []);
-        photosByEventId.get(g.eventId).push(g);
-      }
-
-      const eventGroups = [...photosByEventId.entries()]
-        .map(([eventId, photos]) => ({ event: eventById.get(eventId), photos }))
-        .sort((a, b) => (eventSortIso(b.event) < eventSortIso(a.event) ? -1 : eventSortIso(b.event) > eventSortIso(a.event) ? 1 : 0))
-        .map(({ event, photos }) => ({
-          eventId: event.id, title: event.title, day: event.day || '', month: event.month || '', year: event.year || '',
-          photos: photos.map(publicPhoto),
-        }));
-
-      const groups = [...eventGroups];
-      if (generalPhotos.length > 0) {
-        groups.push({ eventId: '', title: 'General Photos', day: '', month: '', year: '', photos: generalPhotos.map(publicPhoto) });
-      }
+      const groups = groupGalleryItemsByEvent(galleryItems, events, { excludePrivate: true }).map(({ event, photos }) => ({
+        eventId: event ? event.id : '',
+        title: event ? event.title : 'General Photos',
+        day: event ? (event.day || '') : '',
+        month: event ? (event.month || '') : '',
+        year: event ? (event.year || '') : '',
+        photos: photos.map(publicPhoto),
+      }));
 
       return new Response(JSON.stringify(groups), {
         status: 200,
