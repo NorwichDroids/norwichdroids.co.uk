@@ -219,11 +219,13 @@ itself — no dashboard steps needed:
     photos, an oversized photo is automatically shrunk to fit rather than
     rejected. Each photo shows an "Edit" link to whoever uploaded it, so
     they can change the caption, re-tag it to a different event, or swap
-    the photo itself later. From "Admin -> Gallery" any admin can remove a
-    photo that shouldn't be there (the admin table also shows which event,
-    if any, each photo is tagged to); members can edit their own photos but
-    can't remove anyone else's, and can't edit anyone else's either — only
-    an admin can remove.
+    the photo itself later — this only ever shows up for the person who
+    added that particular photo, nobody else. From "Admin -> Gallery" any
+    admin can edit ANY photo's caption or event tag (or replace the photo
+    itself), or remove one entirely, regardless of who uploaded it — use
+    the "Edit" link in that table. A member, by contrast, can only edit
+    their own photos there, never anyone else's, and can't remove any
+    photo at all (removing is admin-only, from Admin -> Gallery).
   - Every member can add a photo of their own droid from the "Our Droids"
     tab (droid type, an optional custom name like "R5-D3", an optional
     caption, and a required photo — JPEG, PNG, or WEBP, auto-shrunk if
