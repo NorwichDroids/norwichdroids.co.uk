@@ -725,6 +725,124 @@ const HEAD = `<meta charset="utf-8">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Exo+2:wght@500;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="/css/style.css">`;
 
+// Crop/rotate photo editor — loaded only on Members Area pages that have a
+// photo upload field (dashboard tabs + My Account), never on the public
+// pages, which is why this is kept separate from the shared HEAD constant
+// above. Pinned to a specific, well-established version of Cropper.js
+// (the classic imperative API, not the newer Web Components rewrite) from
+// cdnjs. If this CDN script ever fails to load — network hiccup, CDN
+// outage — window.Cropper simply stays undefined and every photo input
+// below quietly falls back to a plain, un-cropped upload; nothing about
+// the existing upload flow depends on this library being present.
+const PHOTO_EDITOR_HEAD = `
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js"></script>`;
+
+// One shared modal, wired generically to every input[type=file][data-photo-editor]
+// on the page — added once per page (see dashboardHTML / changePasswordHTML)
+// rather than once per form, since a member only ever has one file picker
+// open at a time.
+function photoEditorMarkup() {
+  return `
+<div class="photo-editor-overlay" id="photoEditorOverlay" hidden>
+  <div class="photo-editor-box">
+    <h1 style="font-size:16px; text-align:left; margin:0;">Crop &amp; Rotate</h1>
+    <div class="photo-editor-image-wrap"><img id="photoEditorImage" alt=""></div>
+    <div class="photo-editor-controls">
+      <button type="button" class="btn-small" id="photoEditorRotateLeft">&#8634; Rotate Left</button>
+      <button type="button" class="btn-small" id="photoEditorRotateRight">&#8635; Rotate Right</button>
+      <span style="flex:1;"></span>
+      <button type="button" class="btn-small" id="photoEditorCancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="photoEditorApply">Use This Photo</button>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  // No Cropper on window means the CDN script didn't load — every photo
+  // input just behaves as a plain <input type="file"> with no editor step.
+  if (!window.Cropper) return;
+  var overlay = document.getElementById('photoEditorOverlay');
+  var img = document.getElementById('photoEditorImage');
+  var rotateLeftBtn = document.getElementById('photoEditorRotateLeft');
+  var rotateRightBtn = document.getElementById('photoEditorRotateRight');
+  var cancelBtn = document.getElementById('photoEditorCancel');
+  var applyBtn = document.getElementById('photoEditorApply');
+  var inputs = document.querySelectorAll('input[type="file"][data-photo-editor]');
+  if (!overlay || !img || inputs.length === 0) return;
+
+  var cropper = null;
+  var activeInput = null;
+
+  function extensionFor(type) {
+    if (type === 'image/png') return 'png';
+    if (type === 'image/webp') return 'webp';
+    return 'jpg';
+  }
+
+  function closeEditor(clearInput) {
+    if (cropper) { cropper.destroy(); cropper = null; }
+    overlay.hidden = true;
+    img.removeAttribute('src');
+    if (clearInput && activeInput) activeInput.value = '';
+    activeInput = null;
+  }
+
+  function openEditor(input, file) {
+    activeInput = input;
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      img.src = e.target.result;
+      overlay.hidden = false;
+      if (cropper) cropper.destroy();
+      cropper = new Cropper(img, {
+        viewMode: 1,
+        dragMode: 'move',
+        autoCropArea: 1,
+        background: false,
+        responsive: true,
+      });
+    };
+    reader.readAsDataURL(file);
+  }
+
+  inputs.forEach(function (input) {
+    input.addEventListener('change', function () {
+      var file = input.files && input.files[0];
+      if (!file || !/^image\\//.test(file.type)) return;
+      openEditor(input, file);
+    });
+  });
+
+  if (rotateLeftBtn) rotateLeftBtn.addEventListener('click', function () { if (cropper) cropper.rotate(-90); });
+  if (rotateRightBtn) rotateRightBtn.addEventListener('click', function () { if (cropper) cropper.rotate(90); });
+  if (cancelBtn) cancelBtn.addEventListener('click', function () { closeEditor(true); });
+
+  if (applyBtn) applyBtn.addEventListener('click', function () {
+    if (!cropper || !activeInput) { closeEditor(false); return; }
+    var input = activeInput;
+    var originalFile = input.files && input.files[0];
+    var preferredType = (originalFile && originalFile.type) || 'image/jpeg';
+    cropper.getCroppedCanvas({ imageSmoothingQuality: 'high' }).toBlob(function (blob) {
+      if (blob) {
+        // Use the blob's own type, not the original file's — if the browser
+        // can't encode the original format it silently falls back (usually
+        // to PNG), and the server's magic-byte check needs the two to match.
+        var actualType = blob.type || preferredType;
+        var ext = extensionFor(actualType);
+        var baseName = (originalFile && originalFile.name ? originalFile.name.replace(/\\.[^.]+$/, '') : 'photo');
+        var newFile = new File([blob], baseName + '.' + ext, { type: actualType });
+        var dt = new DataTransfer();
+        dt.items.add(newFile);
+        input.files = dt.files;
+      }
+      closeEditor(false);
+    }, preferredType, 0.92);
+  });
+})();
+</script>`;
+}
+
 function publicHead() {
   return `
 <div class="site-nav">
@@ -924,7 +1042,13 @@ function directoryTabHTML(users) {
       </div>`).join('')}</div>`;
 }
 
-function logsTabHTML(buildLogs, currentUser, error, notice) {
+function logsTabHTML(buildLogs, currentUser, error, notice, editId) {
+  // Members can edit only their OWN posts (ownerId, not the display-name
+  // author field — an admin can rename a member later). Legacy posts from
+  // before ownerId existed have none, so they simply have no Edit link;
+  // an admin can still fix those up from Admin > Build Logs.
+  const editingItem = editId ? buildLogs.find((p) => p.id === editId && p.ownerId === currentUser.id) : null;
+
   const posts = buildLogs.length === 0
     ? `<p class="sub">No build log posts yet — be the first to share progress with the form on the right.</p>`
     : `<div class="buildlog-grid">${buildLogs.map((p) => `
@@ -933,75 +1057,94 @@ function logsTabHTML(buildLogs, currentUser, error, notice) {
         <div class="body">
           <div class="who">${esc(p.author)} &middot; ${esc(p.droid)}</div>
           <div class="caption">${esc(p.caption)}</div>
+          ${p.ownerId === currentUser.id ? `<div style="margin-top:8px;"><a class="btn-small" href="/members/dashboard?tab=logs&edit=${encodeURIComponent(p.id)}">Edit</a></div>` : ''}
         </div>
       </div>`).join('')}</div>`;
+
+  const formTitle = editingItem ? 'Edit Your Update' : 'Share a Build Update';
+  const formAction = editingItem ? '/members/logs/update' : '/members/add-buildlog?tab=logs';
+  const submitLabel = editingItem ? 'Save Changes' : 'Post Update';
 
   return `
     <div class="split-layout">
       <div class="split-main">${posts}</div>
       <aside class="split-sidebar">
         <div class="login-card" style="max-width:none; margin:0;">
-          <h1 style="font-size:16px; text-align:left;">Share a Build Update</h1>
+          <h1 style="font-size:16px; text-align:left;">${formTitle}</h1>
           ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
           ${notice ? `<div class="admin-success">${esc(notice)}</div>` : ''}
-          <form method="post" action="/members/add-buildlog?tab=logs" enctype="multipart/form-data">
+          <form method="post" action="${formAction}" enctype="multipart/form-data">
+            ${editingItem ? `<input type="hidden" name="log_id" value="${esc(editingItem.id)}">` : ''}
             <div class="field">
               <label for="log_droid">Droid</label>
               <select id="log_droid" name="droid" required>
-                ${DROID_OPTIONS.map((opt) => `<option value="${esc(opt)}">${esc(opt)}</option>`).join('')}
+                ${DROID_OPTIONS.map((opt) => `<option value="${esc(opt)}" ${editingItem && editingItem.droid === opt ? 'selected' : ''}>${esc(opt)}</option>`).join('')}
               </select>
             </div>
             <div class="field">
               <label for="log_caption">What's new?</label>
-              <textarea id="log_caption" name="caption" rows="3" required placeholder="e.g. Dome motor finally spins smoothly..."></textarea>
+              <textarea id="log_caption" name="caption" rows="3" required placeholder="e.g. Dome motor finally spins smoothly...">${editingItem ? esc(editingItem.caption) : ''}</textarea>
             </div>
             <div class="field">
-              <label for="log_photo">Photo (optional)</label>
-              <input type="file" id="log_photo" name="photo" accept="image/jpeg,image/png,image/webp">
+              <label for="log_photo">Photo ${editingItem ? '<span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — leave blank to keep the current photo)</span>' : '(optional)'}</label>
+              <input type="file" id="log_photo" name="photo" accept="image/jpeg,image/png,image/webp" data-photo-editor>
             </div>
-            <button type="submit" class="btn btn-primary">Post Update</button>
+            <button type="submit" class="btn btn-primary">${submitLabel}</button>
+            ${editingItem ? `<a href="/members/dashboard?tab=logs" class="btn-small" style="margin-left:10px;">Cancel</a>` : ''}
           </form>
-          <p style="font-size:12px; color:var(--muted); margin:12px 0 0;">Posts as ${esc(currentUser.name)}. Photos are only ever shown here in the Members Area, never on the public site. An admin can edit or remove posts from Admin &gt; Build Logs.</p>
+          <p style="font-size:12px; color:var(--muted); margin:12px 0 0;">Posts as ${esc(currentUser.name)}. Photos are only ever shown here in the Members Area, never on the public site. You can edit your own posts any time — an admin can also edit or remove posts from Admin &gt; Build Logs.</p>
         </div>
       </aside>
     </div>`;
 }
 
-function galleryTabHTML(galleryItems, currentUser, error, notice) {
+function galleryTabHTML(galleryItems, currentUser, error, notice, editId) {
+  // Same owner-only edit rule as build logs above.
+  const editingItem = editId ? galleryItems.find((g) => g.id === editId && g.ownerId === currentUser.id) : null;
+
   const photos = galleryItems.length === 0
     ? `<p class="sub">No photos yet — be the first to share one with the form on the right.</p>`
     : `<div class="gallery-grid">${galleryItems.map((g) => `
       <div class="card">
         <div class="thumb"><img src="/public/gallery-photo/${esc(g.id)}" alt="${esc(g.caption || g.uploaderName)}"></div>
-        <div class="caption">${g.caption ? `${esc(g.caption)} &middot; ` : ''}${esc(g.uploaderName)}</div>
+        <div class="caption">${g.caption ? `${esc(g.caption)} &middot; ` : ''}${esc(g.uploaderName)}${g.ownerId === currentUser.id ? ` &middot; <a href="/members/dashboard?tab=gallery&edit=${encodeURIComponent(g.id)}">Edit</a>` : ''}</div>
       </div>`).join('')}</div>`;
+
+  const formTitle = editingItem ? 'Edit Your Photo' : 'Add a Photo';
+  const formAction = editingItem ? '/members/gallery/update' : '/members/gallery/upload';
+  const submitLabel = editingItem ? 'Save Changes' : 'Upload Photo';
 
   return `
     <div class="split-layout">
       <div class="split-main">${photos}</div>
       <aside class="split-sidebar">
         <div class="login-card" style="max-width:none; margin:0;">
-          <h1 style="font-size:16px; text-align:left;">Add a Photo</h1>
+          <h1 style="font-size:16px; text-align:left;">${formTitle}</h1>
           ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
           ${notice ? `<div class="admin-success">${esc(notice)}</div>` : ''}
-          <form method="post" action="/members/gallery/upload" enctype="multipart/form-data">
+          <form method="post" action="${formAction}" enctype="multipart/form-data">
+            ${editingItem ? `<input type="hidden" name="photo_id" value="${esc(editingItem.id)}">` : ''}
             <div class="field">
-              <label for="gallery_photo">Photo</label>
-              <input type="file" id="gallery_photo" name="photo" accept="image/jpeg,image/png,image/webp" required>
+              <label for="gallery_photo">Photo ${editingItem ? '<span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — leave blank to keep the current photo)</span>' : ''}</label>
+              <input type="file" id="gallery_photo" name="photo" accept="image/jpeg,image/png,image/webp" data-photo-editor ${editingItem ? '' : 'required'}>
             </div>
             <div class="field">
               <label for="gallery_caption">Caption (optional)</label>
-              <input type="text" id="gallery_caption" name="caption" maxlength="140" placeholder="e.g. Nor-Con 2026 stall">
+              <input type="text" id="gallery_caption" name="caption" maxlength="140" placeholder="e.g. Nor-Con 2026 stall" value="${editingItem ? esc(editingItem.caption || '') : ''}">
             </div>
-            <button type="submit" class="btn btn-primary">Upload Photo</button>
+            <button type="submit" class="btn btn-primary">${submitLabel}</button>
+            ${editingItem ? `<a href="/members/dashboard?tab=gallery" class="btn-small" style="margin-left:10px;">Cancel</a>` : ''}
           </form>
-          <p style="font-size:12px; color:var(--muted); margin:12px 0 0;">JPEG, PNG or WEBP, up to 1.5MB. Shown on the public Gallery page for everyone to see. An admin can remove photos from Admin &gt; Gallery.</p>
+          <p style="font-size:12px; color:var(--muted); margin:12px 0 0;">JPEG, PNG or WEBP, up to 1.5MB. Shown on the public Gallery page for everyone to see. You can edit your own photos any time — an admin can remove any photo from Admin &gt; Gallery.</p>
         </div>
       </aside>
     </div>`;
 }
 
-function droidsTabHTML(droidShowcase, currentUser, error, notice) {
+function droidsTabHTML(droidShowcase, currentUser, error, notice, editId) {
+  // Same owner-only edit rule as build logs / gallery above.
+  const editingItem = editId ? droidShowcase.find((d) => d.id === editId && d.ownerId === currentUser.id) : null;
+
   const cards = droidShowcase.length === 0
     ? `<p class="sub">No droid photos yet — be the first to add yours with the form on the right.</p>`
     : `<div class="card-grid">${droidShowcase.map((d) => `
@@ -1010,39 +1153,46 @@ function droidsTabHTML(droidShowcase, currentUser, error, notice) {
         <div class="body">
           <h4>${esc(d.droidName || d.droidType)}</h4>
           <p>${d.droidName ? `${esc(d.droidType)} &middot; ` : ''}Built by ${esc(d.builderName)}${d.caption ? ` &mdash; ${esc(d.caption)}` : ''}</p>
+          ${d.ownerId === currentUser.id ? `<p style="margin-top:6px;"><a class="btn-small" href="/members/dashboard?tab=droids&edit=${encodeURIComponent(d.id)}">Edit</a></p>` : ''}
         </div>
       </div>`).join('')}</div>`;
+
+  const formTitle = editingItem ? 'Edit Your Droid' : 'Add Your Droid';
+  const formAction = editingItem ? '/members/droids/update' : '/members/droids/upload';
+  const submitLabel = editingItem ? 'Save Changes' : 'Add Photo';
 
   return `
     <div class="split-layout">
       <div class="split-main">${cards}</div>
       <aside class="split-sidebar">
         <div class="login-card" style="max-width:none; margin:0;">
-          <h1 style="font-size:16px; text-align:left;">Add Your Droid</h1>
+          <h1 style="font-size:16px; text-align:left;">${formTitle}</h1>
           ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
           ${notice ? `<div class="admin-success">${esc(notice)}</div>` : ''}
-          <form method="post" action="/members/droids/upload" enctype="multipart/form-data">
+          <form method="post" action="${formAction}" enctype="multipart/form-data">
+            ${editingItem ? `<input type="hidden" name="droid_id" value="${esc(editingItem.id)}">` : ''}
             <div class="field">
               <label for="droid_type">Droid Type</label>
               <select id="droid_type" name="droid_type" required>
-                ${DROID_OPTIONS.map((opt) => `<option value="${esc(opt)}">${esc(opt)}</option>`).join('')}
+                ${DROID_OPTIONS.map((opt) => `<option value="${esc(opt)}" ${editingItem && editingItem.droidType === opt ? 'selected' : ''}>${esc(opt)}</option>`).join('')}
               </select>
             </div>
             <div class="field">
               <label for="droid_name">Droid Name <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span></label>
-              <input type="text" id="droid_name" name="droid_name" maxlength="60" placeholder="e.g. R5-D3">
+              <input type="text" id="droid_name" name="droid_name" maxlength="60" placeholder="e.g. R5-D3" value="${editingItem ? esc(editingItem.droidName || '') : ''}">
             </div>
             <div class="field">
-              <label for="droid_photo">Photo</label>
-              <input type="file" id="droid_photo" name="photo" accept="image/jpeg,image/png,image/webp" required>
+              <label for="droid_photo">Photo ${editingItem ? '<span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — leave blank to keep the current photo)</span>' : ''}</label>
+              <input type="file" id="droid_photo" name="photo" accept="image/jpeg,image/png,image/webp" data-photo-editor ${editingItem ? '' : 'required'}>
             </div>
             <div class="field">
               <label for="droid_caption">Caption <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span></label>
-              <input type="text" id="droid_caption" name="caption" maxlength="140" placeholder="e.g. Fully driven, working periscope">
+              <input type="text" id="droid_caption" name="caption" maxlength="140" placeholder="e.g. Fully driven, working periscope" value="${editingItem ? esc(editingItem.caption || '') : ''}">
             </div>
-            <button type="submit" class="btn btn-primary">Add Photo</button>
+            <button type="submit" class="btn btn-primary">${submitLabel}</button>
+            ${editingItem ? `<a href="/members/dashboard?tab=droids" class="btn-small" style="margin-left:10px;">Cancel</a>` : ''}
           </form>
-          <p style="font-size:12px; color:var(--muted); margin:12px 0 0;">JPEG, PNG or WEBP, up to 1.5MB. Shown in the "Our Droids" section on the public homepage for everyone to see. An admin can remove photos from Admin &gt; Droids.</p>
+          <p style="font-size:12px; color:var(--muted); margin:12px 0 0;">JPEG, PNG or WEBP, up to 1.5MB. Shown in the "Our Droids" section on the public homepage for everyone to see. You can edit your own entry any time — an admin can remove photos from Admin &gt; Droids.</p>
         </div>
       </aside>
     </div>`;
@@ -1066,15 +1216,15 @@ function dashNav(active, currentUser) {
 </div>`;
 }
 
-function dashboardHTML({ tab, openEventId, events, rsvps, addedDroids, users, buildLogs, logError, logNotice, galleryItems, galleryError, galleryNotice, droidShowcase, droidsError, droidsNotice, eventsError, eventsNotice, currentUser }) {
+function dashboardHTML({ tab, openEventId, editId, events, rsvps, addedDroids, users, buildLogs, logError, logNotice, galleryItems, galleryError, galleryNotice, droidShowcase, droidsError, droidsNotice, eventsError, eventsNotice, currentUser }) {
   const content = tab === 'events' ? eventsTabHTML(events, rsvps, addedDroids, openEventId, eventsError, eventsNotice)
     : tab === 'directory' ? directoryTabHTML(users)
-    : tab === 'gallery' ? galleryTabHTML(galleryItems, currentUser, galleryError, galleryNotice)
-    : tab === 'droids' ? droidsTabHTML(droidShowcase || [], currentUser, droidsError, droidsNotice)
-    : logsTabHTML(buildLogs, currentUser, logError, logNotice);
+    : tab === 'gallery' ? galleryTabHTML(galleryItems, currentUser, galleryError, galleryNotice, editId)
+    : tab === 'droids' ? droidsTabHTML(droidShowcase || [], currentUser, droidsError, droidsNotice, editId)
+    : logsTabHTML(buildLogs, currentUser, logError, logNotice, editId);
 
   return `<!doctype html>
-<html lang="en"><head>${HEAD}<title>Members Dashboard — Norwich Droids</title></head>
+<html lang="en"><head>${HEAD}${PHOTO_EDITOR_HEAD}<title>Members Dashboard — Norwich Droids</title></head>
 <body>
 ${dashNav(tab, currentUser)}
 <div class="dash-main">
@@ -1082,13 +1232,14 @@ ${dashNav(tab, currentUser)}
   <p class="sub">Here's what's coming up for members.</p>
   ${content}
 </div>
+${photoEditorMarkup()}
 </body></html>`;
 }
 
 function changePasswordHTML(currentUser, state = {}) {
   const { pwError, pwSuccess, photoError, photoSuccess, bioError, bioSuccess, nicknameError, nicknameSuccess } = state;
   return `<!doctype html>
-<html lang="en"><head>${HEAD}<title>My Account — Norwich Droids</title></head>
+<html lang="en"><head>${HEAD}${PHOTO_EDITOR_HEAD}<title>My Account — Norwich Droids</title></head>
 <body>
 ${dashNav('change-password', currentUser)}
 <div class="dash-main">
@@ -1105,7 +1256,7 @@ ${dashNav('change-password', currentUser)}
         : `<div class="avatar avatar-lg">${esc(initials(currentUser.name))}</div>`}
       <div class="photo-actions">
         <form method="post" action="/members/account/photo" enctype="multipart/form-data">
-          <input type="file" name="photo" accept="image/jpeg,image/png,image/webp" required>
+          <input type="file" name="photo" accept="image/jpeg,image/png,image/webp" data-photo-editor required>
           <button type="submit" class="btn-small" style="margin-top:8px;">Upload Photo</button>
         </form>
         ${currentUser.hasPhoto ? `
@@ -1162,6 +1313,7 @@ ${dashNav('change-password', currentUser)}
     </form>
   </div>
 </div>
+${photoEditorMarkup()}
 </body></html>`;
 }
 
@@ -1813,7 +1965,7 @@ export default {
       const galleryItems = tab === 'gallery' ? await getGalleryIndex(env) : [];
       const droidShowcase = tab === 'droids' ? await getDroidShowcase(env) : [];
       return htmlResponse(dashboardHTML({
-        tab, openEventId: url.searchParams.get('open') || '', events, rsvps, addedDroids, users, buildLogs, galleryItems, droidShowcase,
+        tab, openEventId: url.searchParams.get('open') || '', editId: url.searchParams.get('edit') || '', events, rsvps, addedDroids, users, buildLogs, galleryItems, droidShowcase,
         eventsError: '', eventsNotice: '', droidsError: '', droidsNotice: '', currentUser,
       }));
     }
@@ -1905,7 +2057,10 @@ export default {
         await saveBuildLogPhoto(env, id, photoToSave.contentType, bytesToBase64(photoToSave.bytes));
       }
       const buildLogs = await getBuildLogs(env);
-      const newLog = { id, author: currentUser.name, droid, caption };
+      // ownerId (as opposed to the display-name author field, which an admin
+      // can change later via Admin > Members) is what lets the poster edit
+      // this later from the Build Logs tab — see /members/logs/update below.
+      const newLog = { id, author: currentUser.name, droid, caption, ownerId: currentUser.id };
       if (photoToSave) {
         newLog.hasPhoto = true;
         newLog.photoUpdatedAt = Date.now();
@@ -1913,6 +2068,66 @@ export default {
       buildLogs.push(newLog);
       await saveBuildLogs(env, buildLogs);
       return await renderWith('', 'Update posted.');
+    }
+
+    // A member editing their OWN build log post (ownerId-gated — this is
+    // deliberately separate from /members/admin/logs/update below, which is
+    // admin-only and can edit anyone's post but can't replace the photo).
+    if (path === '/members/logs/update' && request.method === 'POST') {
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      const renderWith = async (logError, logNotice, editId) => {
+        const buildLogs = await getBuildLogs(env);
+        return htmlResponse(dashboardHTML({
+          tab: 'logs', openEventId: '', editId: editId || '', events: [], rsvps: {}, addedDroids: {}, users: [],
+          buildLogs, logError, logNotice, galleryItems: [], currentUser,
+        }));
+      };
+
+      const form = await request.formData();
+      const logId = String(form.get('log_id') || '');
+      const droid = String(form.get('droid') || '').trim();
+      const caption = String(form.get('caption') || '').trim();
+
+      const buildLogs = await getBuildLogs(env);
+      const log = buildLogs.find((p) => p.id === logId);
+      // Ownership is checked server-side, not just hidden in the UI — a
+      // member can't edit another member's post by forging the log_id.
+      if (!log || log.ownerId !== currentUser.id) {
+        return await renderWith('You can only edit your own posts.', '');
+      }
+
+      if (droid === '' || caption === '') {
+        return await renderWith('Please choose a droid and describe the update.', '', logId);
+      }
+
+      const file = form.get('photo');
+      const hasFile = file && typeof file !== 'string' && file.size;
+      if (hasFile) {
+        if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
+          return await renderWith('Photos must be JPEG, PNG, or WEBP.', '', logId);
+        }
+        if (file.size > MAX_PHOTO_UPLOAD_BYTES) {
+          return await renderWith('That photo is too large to upload — please use a file under 8MB.', '', logId);
+        }
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        if (!matchesDeclaredImageType(bytes, file.type)) {
+          return await renderWith("That file doesn't look like a valid image.", '', logId);
+        }
+        const prepared = await prepareUploadedPhoto(bytes, file.type);
+        if (prepared.errorMessage) {
+          return await renderWith(prepared.errorMessage, '', logId);
+        }
+        await saveBuildLogPhoto(env, logId, prepared.contentType, bytesToBase64(prepared.bytes));
+        log.hasPhoto = true;
+        log.photoUpdatedAt = Date.now();
+      }
+
+      log.droid = droid;
+      log.caption = caption;
+      await saveBuildLogs(env, buildLogs);
+      return await renderWith('', 'Update saved.');
     }
 
     if (path === '/members/gallery/upload' && request.method === 'POST') {
@@ -1950,12 +2165,65 @@ export default {
       const id = crypto.randomUUID();
       await saveGalleryPhotoBlob(env, id, prepared.contentType, bytesToBase64(prepared.bytes));
       const galleryItems = await getGalleryIndex(env);
-      galleryItems.unshift({ id, uploaderName: currentUser.name, caption, createdAt: new Date().toISOString() });
+      // ownerId lets the uploader edit this later from the Gallery tab — see
+      // /members/gallery/update below. uploaderName is just a display label
+      // and can drift from ownerId if an admin renames the member.
+      galleryItems.unshift({ id, uploaderName: currentUser.name, caption, createdAt: new Date().toISOString(), ownerId: currentUser.id });
       await saveGalleryIndex(env, galleryItems);
       return htmlResponse(dashboardHTML({
         tab: 'gallery', openEventId: '', events: [], rsvps: {}, addedDroids: {}, users: [], buildLogs: [],
         galleryItems, galleryError: '', galleryNotice: 'Photo uploaded — now visible on the public Gallery page.', currentUser,
       }));
+    }
+
+    // A member editing their OWN gallery photo (ownerId-gated).
+    if (path === '/members/gallery/update' && request.method === 'POST') {
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      const renderWith = async (galleryError, galleryNotice, editId) => {
+        const galleryItems = await getGalleryIndex(env);
+        return htmlResponse(dashboardHTML({
+          tab: 'gallery', openEventId: '', editId: editId || '', events: [], rsvps: {}, addedDroids: {}, users: [], buildLogs: [],
+          galleryItems, galleryError, galleryNotice, currentUser,
+        }));
+      };
+
+      const form = await request.formData();
+      const photoId = String(form.get('photo_id') || '');
+      const caption = String(form.get('caption') || '').trim().slice(0, 140);
+
+      const galleryItems = await getGalleryIndex(env);
+      const item = galleryItems.find((g) => g.id === photoId);
+      // Ownership is checked server-side, not just hidden in the UI — a
+      // member can't edit another member's photo by forging the photo_id.
+      if (!item || item.ownerId !== currentUser.id) {
+        return await renderWith('You can only edit your own photos.', '');
+      }
+
+      const file = form.get('photo');
+      const hasFile = file && typeof file !== 'string' && file.size;
+      if (hasFile) {
+        if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
+          return await renderWith('Photos must be JPEG, PNG, or WEBP.', '', photoId);
+        }
+        if (file.size > MAX_PHOTO_UPLOAD_BYTES) {
+          return await renderWith('That photo is too large to upload — please use a file under 8MB.', '', photoId);
+        }
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        if (!matchesDeclaredImageType(bytes, file.type)) {
+          return await renderWith("That file doesn't look like a valid image.", '', photoId);
+        }
+        const prepared = await prepareUploadedPhoto(bytes, file.type);
+        if (prepared.errorMessage) {
+          return await renderWith(prepared.errorMessage, '', photoId);
+        }
+        await saveGalleryPhotoBlob(env, photoId, prepared.contentType, bytesToBase64(prepared.bytes));
+      }
+
+      item.caption = caption;
+      await saveGalleryIndex(env, galleryItems);
+      return await renderWith('', 'Photo updated.');
     }
 
     if (path === '/members/droids/upload' && request.method === 'POST') {
@@ -1998,12 +2266,72 @@ export default {
       const id = crypto.randomUUID();
       await saveDroidShowcasePhoto(env, id, prepared.contentType, bytesToBase64(prepared.bytes));
       const droidShowcase = await getDroidShowcase(env);
-      droidShowcase.unshift({ id, builderName: currentUser.name, droidType, droidName, caption, createdAt: new Date().toISOString() });
+      // ownerId lets the builder edit this entry later from the Our Droids
+      // tab — see /members/droids/update below.
+      droidShowcase.unshift({ id, builderName: currentUser.name, droidType, droidName, caption, createdAt: new Date().toISOString(), ownerId: currentUser.id });
       await saveDroidShowcase(env, droidShowcase);
       return htmlResponse(dashboardHTML({
         tab: 'droids', openEventId: '', events: [], rsvps: {}, addedDroids: {}, users: [], buildLogs: [],
         galleryItems: [], droidShowcase, droidsError: '', droidsNotice: 'Photo added — now visible on the public homepage.', currentUser,
       }));
+    }
+
+    // A member editing their OWN droid showcase entry (ownerId-gated).
+    if (path === '/members/droids/update' && request.method === 'POST') {
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      const renderWith = async (droidsError, droidsNotice, editId) => {
+        const droidShowcase = await getDroidShowcase(env);
+        return htmlResponse(dashboardHTML({
+          tab: 'droids', openEventId: '', editId: editId || '', events: [], rsvps: {}, addedDroids: {}, users: [], buildLogs: [],
+          galleryItems: [], droidShowcase, droidsError, droidsNotice, currentUser,
+        }));
+      };
+
+      const form = await request.formData();
+      const droidId = String(form.get('droid_id') || '');
+      const droidType = String(form.get('droid_type') || '').trim();
+      const droidName = String(form.get('droid_name') || '').trim().slice(0, 60);
+      const caption = String(form.get('caption') || '').trim().slice(0, 140);
+
+      const droidShowcase = await getDroidShowcase(env);
+      const item = droidShowcase.find((d) => d.id === droidId);
+      // Ownership is checked server-side, not just hidden in the UI — a
+      // member can't edit another member's entry by forging the droid_id.
+      if (!item || item.ownerId !== currentUser.id) {
+        return await renderWith('You can only edit your own droid entry.', '');
+      }
+
+      if (!droidType) {
+        return await renderWith('Please choose a droid type.', '', droidId);
+      }
+
+      const file = form.get('photo');
+      const hasFile = file && typeof file !== 'string' && file.size;
+      if (hasFile) {
+        if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
+          return await renderWith('Photos must be JPEG, PNG, or WEBP.', '', droidId);
+        }
+        if (file.size > MAX_PHOTO_UPLOAD_BYTES) {
+          return await renderWith('That photo is too large to upload — please use a file under 8MB.', '', droidId);
+        }
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        if (!matchesDeclaredImageType(bytes, file.type)) {
+          return await renderWith("That file doesn't look like a valid image.", '', droidId);
+        }
+        const prepared = await prepareUploadedPhoto(bytes, file.type);
+        if (prepared.errorMessage) {
+          return await renderWith(prepared.errorMessage, '', droidId);
+        }
+        await saveDroidShowcasePhoto(env, droidId, prepared.contentType, bytesToBase64(prepared.bytes));
+      }
+
+      item.droidType = droidType;
+      item.droidName = droidName;
+      item.caption = caption;
+      await saveDroidShowcase(env, droidShowcase);
+      return await renderWith('', 'Droid entry updated.');
     }
 
     // Any logged-in member can propose an event; it only reaches the real
