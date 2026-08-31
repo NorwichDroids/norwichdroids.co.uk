@@ -905,6 +905,12 @@ function photoEditorMarkup() {
     input.addEventListener('change', function () {
       var file = input.files && input.files[0];
       if (!file || !/^image\\//.test(file.type)) return;
+      // A multi-select input (Gallery's "Photo(s)" field) only gets the
+      // crop/rotate step when exactly one file was chosen — cropping only
+      // ever touches files[0], so opening it on a genuine multi-file batch
+      // would silently discard every other selected photo. Picking just one
+      // file still gets the full crop/rotate treatment either way.
+      if (input.files.length > 1) return;
       openEditor(input, file);
     });
   });
@@ -1218,11 +1224,14 @@ function galleryTabHTML(galleryItems, currentUser, error, notice, editId, events
   const formAction = editingItem ? '/members/gallery/update' : '/members/gallery/upload';
   const submitLabel = editingItem ? 'Save Changes' : 'Upload';
   // Editing always replaces exactly one photo (its own crop/rotate-capable
-  // single-file input); adding is a multi-select, which the crop/rotate
-  // tool deliberately doesn't attach to — see PHOTO_EDITOR_HEAD's comment.
+  // single-file input). Adding is a multi-select, but still carries
+  // data-photo-editor too — the shared editor script (see
+  // PHOTO_EDITOR_HEAD's comment) only actually opens it when exactly one
+  // file was chosen, so picking a single photo here still gets crop/rotate,
+  // while picking several skips straight to a plain multi-file upload.
   const photoField = editingItem
     ? `<input type="file" id="gallery_photo" name="photo" accept="image/jpeg,image/png,image/webp" data-photo-editor>`
-    : `<input type="file" id="gallery_photo" name="photos" accept="image/jpeg,image/png,image/webp" multiple required>`;
+    : `<input type="file" id="gallery_photo" name="photos" accept="image/jpeg,image/png,image/webp" multiple required data-photo-editor>`;
 
   return `
     <div class="split-layout">
@@ -1235,7 +1244,7 @@ function galleryTabHTML(galleryItems, currentUser, error, notice, editId, events
           <form method="post" action="${formAction}" enctype="multipart/form-data">
             ${editingItem ? `<input type="hidden" name="photo_id" value="${esc(editingItem.id)}">` : ''}
             <div class="field">
-              <label for="gallery_photo">${editingItem ? 'Photo <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — leave blank to keep the current photo)</span>' : 'Photo(s) <span style="font-weight:400; text-transform:none; letter-spacing:0;">(select more than one to upload them together)</span>'}</label>
+              <label for="gallery_photo">${editingItem ? 'Photo <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — leave blank to keep the current photo)</span>' : 'Photo(s) <span style="font-weight:400; text-transform:none; letter-spacing:0;">(pick one to crop/rotate it first, or select several to upload them together)</span>'}</label>
               ${photoField}
             </div>
             <div class="field">
