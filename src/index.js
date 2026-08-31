@@ -1772,7 +1772,7 @@ document.querySelectorAll('form[action="/members/admin/logs/delete"]').forEach((
 </body></html>`;
 }
 
-function adminGalleryHTML({ currentUser, galleryItems, error, notice, events }) {
+function adminGalleryHTML({ currentUser, galleryItems, error, notice, events, editingItem }) {
   const eventById = new Map((events || []).map((ev) => [ev.id, ev]));
   const rows = galleryItems.map((g) => {
     let eventCell = '<span style="color:var(--muted);">General</span>';
@@ -1787,6 +1787,7 @@ function adminGalleryHTML({ currentUser, galleryItems, error, notice, events }) 
       <td>${eventCell}</td>
       <td style="white-space:normal; max-width:280px;">${g.caption ? esc(g.caption) : '<span style="color:var(--muted);">&mdash;</span>'}</td>
       <td class="admin-actions">
+        <a class="btn-small" href="/members/admin/gallery?edit=${encodeURIComponent(g.id)}">Edit</a>
         <form method="post" action="/members/admin/gallery/delete" onsubmit="return false;" data-photo="${esc(g.uploaderName)}">
           <input type="hidden" name="photo_id" value="${esc(g.id)}">
           <button type="submit" class="btn-small btn-danger">Delete</button>
@@ -1801,11 +1802,35 @@ function adminGalleryHTML({ currentUser, galleryItems, error, notice, events }) 
 ${dashNav('admin', currentUser)}
 <div class="dash-main">
   <h1>Admin</h1>
-  <p class="sub">Remove photos from the public Gallery page. Members add their own from the Gallery tab.</p>
+  <p class="sub">Edit the caption or event tag on any photo, or remove one from the public Gallery page. Members add their own from the Gallery tab, and can edit their own photos there too.</p>
   ${adminSubNav('gallery')}
 
   ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
   ${notice ? `<div class="admin-success">${esc(notice)}</div>` : ''}
+
+  ${editingItem ? `
+  <div class="login-card" style="max-width:520px; margin:0 0 40px;">
+    <h1 style="font-size:16px; text-align:left;">Edit Photo <span style="font-weight:400; text-transform:none; letter-spacing:0;">(uploaded by ${esc(editingItem.uploaderName)})</span></h1>
+    <form method="post" action="/members/admin/gallery/update" enctype="multipart/form-data">
+      <input type="hidden" name="photo_id" value="${esc(editingItem.id)}">
+      <div class="field">
+        <label for="admin_gallery_photo">Photo <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — leave blank to keep the current photo)</span></label>
+        <input type="file" id="admin_gallery_photo" name="photo" accept="image/jpeg,image/png,image/webp">
+      </div>
+      <div class="field">
+        <label for="admin_gallery_event">Event</label>
+        <select id="admin_gallery_event" name="event_id">
+          ${eventPickerOptions(events || [], editingItem.eventId || '')}
+        </select>
+      </div>
+      <div class="field">
+        <label for="admin_gallery_caption">Caption</label>
+        <input type="text" id="admin_gallery_caption" name="caption" maxlength="140" value="${esc(editingItem.caption || '')}">
+      </div>
+      <button type="submit" class="btn btn-primary">Save Changes</button>
+      <a href="/members/admin/gallery" class="btn-small" style="margin-left:10px;">Cancel</a>
+    </form>
+  </div>` : ''}
 
   <div class="admin-table-wrap">
     <table class="admin-table">
@@ -3075,7 +3100,54 @@ export default {
       if (path === '/members/admin/gallery' && request.method === 'GET') {
         const galleryItems = await getGalleryIndex(env);
         const events = await getEvents(env);
-        return htmlResponse(adminGalleryHTML({ currentUser, galleryItems, error: '', notice: '', events }));
+        const editId = url.searchParams.get('edit');
+        const editingItem = editId ? galleryItems.find((g) => g.id === editId) || null : null;
+        return htmlResponse(adminGalleryHTML({ currentUser, galleryItems, error: '', notice: '', events, editingItem }));
+      }
+
+      // An admin can edit ANY photo's caption/event tag (and optionally
+      // replace the image itself) — unlike the member-facing
+      // /members/gallery/update route above, there's no ownerId check here,
+      // since this is exactly the admin-wide moderation capability members
+      // don't have. Re-uses the same validate-then-save pattern as every
+      // other photo route.
+      if (path === '/members/admin/gallery/update' && request.method === 'POST') {
+        const form = await request.formData();
+        const photoId = String(form.get('photo_id') || '');
+        const galleryItems = await getGalleryIndex(env);
+        const events = await getEvents(env);
+        const item = galleryItems.find((g) => g.id === photoId);
+        if (!item) {
+          return htmlResponse(adminGalleryHTML({ currentUser, galleryItems, error: 'Photo not found.', notice: '', events, editingItem: null }), 400);
+        }
+        const caption = String(form.get('caption') || '').trim().slice(0, 140);
+        const requestedEventId = String(form.get('event_id') || '').trim();
+        const eventId = events.some((e) => e.id === requestedEventId) ? requestedEventId : '';
+
+        const file = form.get('photo');
+        const hasFile = file && typeof file !== 'string' && file.size;
+        if (hasFile) {
+          if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
+            return htmlResponse(adminGalleryHTML({ currentUser, galleryItems, error: 'Photos must be JPEG, PNG, or WEBP.', notice: '', events, editingItem: item }), 400);
+          }
+          if (file.size > MAX_PHOTO_UPLOAD_BYTES) {
+            return htmlResponse(adminGalleryHTML({ currentUser, galleryItems, error: 'That photo is too large to upload — please use a file under 8MB.', notice: '', events, editingItem: item }), 400);
+          }
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          if (!matchesDeclaredImageType(bytes, file.type)) {
+            return htmlResponse(adminGalleryHTML({ currentUser, galleryItems, error: "That file doesn't look like a valid image.", notice: '', events, editingItem: item }), 400);
+          }
+          const prepared = await prepareUploadedPhoto(bytes, file.type);
+          if (prepared.errorMessage) {
+            return htmlResponse(adminGalleryHTML({ currentUser, galleryItems, error: prepared.errorMessage, notice: '', events, editingItem: item }), 400);
+          }
+          await saveGalleryPhotoBlob(env, photoId, prepared.contentType, bytesToBase64(prepared.bytes));
+        }
+
+        item.caption = caption;
+        item.eventId = eventId;
+        await saveGalleryIndex(env, galleryItems);
+        return htmlResponse(adminGalleryHTML({ currentUser, galleryItems, error: '', notice: 'Photo updated.', events, editingItem: null }));
       }
 
       if (path === '/members/admin/gallery/delete' && request.method === 'POST') {
@@ -3085,12 +3157,12 @@ export default {
         const events = await getEvents(env);
         const target = galleryItems.find((g) => g.id === photoId);
         if (!target) {
-          return htmlResponse(adminGalleryHTML({ currentUser, galleryItems, error: 'Photo not found.', notice: '', events }), 400);
+          return htmlResponse(adminGalleryHTML({ currentUser, galleryItems, error: 'Photo not found.', notice: '', events, editingItem: null }), 400);
         }
         const remaining = galleryItems.filter((g) => g.id !== photoId);
         await saveGalleryIndex(env, remaining);
         await deleteGalleryPhotoBlob(env, photoId);
-        return htmlResponse(adminGalleryHTML({ currentUser, galleryItems: remaining, error: '', notice: 'Photo deleted.', events }));
+        return htmlResponse(adminGalleryHTML({ currentUser, galleryItems: remaining, error: '', notice: 'Photo deleted.', events, editingItem: null }));
       }
 
       // --- Droid showcase moderation -------------------------------------
