@@ -460,6 +460,19 @@ doesn't break: uploads just go back to being rejected with a "please use
 one under 1.5MB" message instead of being resized, exactly like before
 this feature existed.
 
+A NOTE ON "That file doesn't look like a valid image" — every photo upload
+is checked against its actual file content (not just the label the browser
+sends), so this message means the file genuinely isn't a JPEG, PNG, or
+WEBP. By far the most common reason a real, unedited phone photo trips
+this is HEIC/HEIF — the default photo format on newer iPhones (Settings >
+Camera > Formats > "High Efficiency"). The site now recognises a HEIC file
+specifically and shows a clearer message naming that and explaining the
+fix (switch the phone to "Most Compatible" JPEG in Camera settings, or
+convert/export the photo to JPEG before uploading) rather than the generic
+message — the underlying reason to fix it hasn't changed: HEIC photos
+genuinely can't be read here, since the compression it uses isn't
+supported by the image library this site relies on for resizing.
+
 A NOTE ON "Error 1102: Worker exceeded resource limits" — if you ever see
 this while uploading a photo (single or multi-photo), it means resizing
 that photo used more CPU time than your Cloudflare plan allows in one
