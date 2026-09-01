@@ -89,8 +89,12 @@
     }
     grid.innerHTML = '';
     members.forEach(function (m) {
-      var card = document.createElement('div');
+      var card = document.createElement('a');
       card.className = 'card';
+      card.href = '/member/' + encodeURIComponent(m.id);
+      card.style.display = 'block';
+      card.style.color = 'inherit';
+      card.style.textDecoration = 'none';
 
       var thumb = document.createElement('div');
       thumb.className = 'thumb';
@@ -126,6 +130,14 @@
         bio.textContent = m.bio;
         body.appendChild(bio);
       }
+
+      var viewMore = document.createElement('div');
+      viewMore.className = 'bio';
+      viewMore.style.marginTop = '10px';
+      viewMore.style.fontWeight = '700';
+      viewMore.style.color = 'var(--accent)';
+      viewMore.textContent = 'View Profile →';
+      body.appendChild(viewMore);
 
       card.appendChild(body);
       grid.appendChild(card);

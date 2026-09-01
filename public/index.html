@@ -84,9 +84,38 @@
 
 </main>
 
+<div class="lightbox" id="lightbox" hidden>
+  <button type="button" class="lightbox-close" id="lightbox-close" aria-label="Close">&times;</button>
+  <img id="lightbox-img" src="" alt="">
+  <div class="lightbox-caption" id="lightbox-caption"></div>
+</div>
+
 <script>
 (function () {
   var grid = document.getElementById('droid-grid');
+  var lightbox = document.getElementById('lightbox');
+  var lightboxImg = document.getElementById('lightbox-img');
+  var lightboxCaption = document.getElementById('lightbox-caption');
+  var lightboxClose = document.getElementById('lightbox-close');
+
+  function openLightbox(src, alt, captionText) {
+    lightboxImg.src = src;
+    lightboxImg.alt = alt;
+    lightboxCaption.textContent = captionText;
+    lightbox.hidden = false;
+  }
+
+  function closeLightbox() {
+    lightbox.hidden = true;
+    lightboxImg.src = '';
+  }
+
+  lightbox.addEventListener('click', closeLightbox);
+  lightboxImg.addEventListener('click', function (e) { e.stopPropagation(); });
+  lightboxClose.addEventListener('click', closeLightbox);
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && !lightbox.hidden) closeLightbox();
+  });
 
   function showMessage(text) {
     grid.innerHTML = '';
@@ -109,13 +138,23 @@
       var card = document.createElement('div');
       card.className = 'card';
 
+      var bits = [];
+      if (d.droidName && d.droidType) bits.push(d.droidType);
+      bits.push('Built by ' + d.builderName);
+      if (d.caption) bits.push(d.caption);
+      var captionText = bits.join(' — ');
+
       var thumb = document.createElement('div');
       thumb.className = 'thumb';
+      thumb.style.cursor = 'pointer';
       var img = document.createElement('img');
       img.src = '/public/droid-photo/' + encodeURIComponent(d.id);
       img.alt = d.droidName || d.droidType || '';
       img.loading = 'lazy';
       thumb.appendChild(img);
+      thumb.addEventListener('click', function () {
+        openLightbox(img.src, img.alt, captionText);
+      });
       card.appendChild(thumb);
 
       var body = document.createElement('div');
@@ -126,12 +165,16 @@
       body.appendChild(h4);
 
       var p = document.createElement('p');
-      var bits = [];
-      if (d.droidName && d.droidType) bits.push(d.droidType);
-      bits.push('Built by ' + d.builderName);
-      if (d.caption) bits.push(d.caption);
-      p.textContent = bits.join(' — ');
+      p.textContent = captionText;
       body.appendChild(p);
+
+      var link = document.createElement('a');
+      link.className = 'btn-small';
+      link.style.display = 'inline-block';
+      link.style.marginTop = '10px';
+      link.href = '/droid/' + encodeURIComponent(d.id);
+      link.textContent = 'View Build Log';
+      body.appendChild(link);
 
       card.appendChild(body);
       grid.appendChild(card);
