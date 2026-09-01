@@ -279,6 +279,42 @@ itself — no dashboard steps needed:
     photo at a time. If this editor ever fails to load (e.g. no internet
     connection to the small library it uses), photo uploads simply behave
     as a plain file picker instead — nothing stops working.
+  - Every member now has a PUBLIC profile page (linked from their card on
+    the About page's "Meet the Members" section — click a card, or its
+    "View Profile" link, to open it). It shows their photo, name/nickname,
+    droid, and existing "About" description, plus two new optional
+    sections a member can fill in from "My Account": "How I got into the
+    hobby" (up to 600 characters) and "Interests" (up to 300), each shown
+    as its own labelled section, and each simply left out of the page if
+    it's blank. An admin can also set both fields for a member from
+    "Admin -> Members" -> Edit, same as nickname/bio already work. If a
+    member has added any droids from "Our Droids", their profile page also
+    lists them under "Their Builds", linking through to each droid's build
+    log page (see below).
+  - Droid photos in the "Our Droids" section on the PUBLIC homepage now do
+    two things when clicked: the photo itself enlarges in a lightbox
+    (click anywhere outside the photo, the X, or press Escape to close it
+    — same as the Gallery page already worked), and a "View Build Log"
+    link on the card opens that droid's own dedicated build log page.
+  - Each droid added from "Our Droids" gets its own PUBLIC build log page
+    (linked from its card on the homepage, from the "Build Log" link next
+    to it on the member's own "Our Droids" tab, and from "Their Builds" on
+    the owner's profile page above) — a running diary of progress updates
+    for that specific droid, not a one-off write-up. Only the member who
+    added that droid can post to its diary (an "Add Diary Entry" form
+    appears right on the page when they're logged in and viewing their own
+    droid's page) — each entry is a short write-up of what was worked on
+    and how, with an optional photo (JPEG, PNG, or WEBP, auto-shrunk if
+    oversized, same as everywhere else), and entries show newest-first so
+    the page reads like an ongoing diary as more get added over time. The
+    owner can edit or delete their own entries later (edit can also
+    replace or remove the entry's photo); an admin can delete ANY diary
+    entry to moderate, even one they didn't post, the same "owner edits
+    their own, admin can remove any" rule used everywhere else on the
+    site. Deleting a droid entirely from "Admin -> Droids" also removes
+    its whole diary and any photos attached to it, so nothing is left
+    behind. Anyone can read a droid's build log with no login at all —
+    only posting, editing, and deleting need to be logged in.
 
 
 4. POINT norwichdroids.co.uk AT THIS SITE
@@ -351,6 +387,15 @@ normal for a site this size:
                                  whoever has an account, with their photo if
                                  they've added one
   - Build log posts:            src/index.js  (the BUILD_LOGS array)
+  - Member profile pages:       no file to edit — /member/<id> is generated
+                                 live by src/index.js from each member's
+                                 account (photo, name, droid, About/hobby/
+                                 interests, and their droids); content comes
+                                 from "My Account" and "Admin -> Members"
+  - Droid build log pages:      no file to edit — /droid/<id> is generated
+                                 live by src/index.js; diary entries come
+                                 from the droid owner posting on the page
+                                 itself (see section 3)
   - Footer email/address/social: every public/*.html file, near the bottom
                                  (the footer-social links are the same 3
                                  icons/URLs repeated on every page — update
