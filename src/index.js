@@ -651,6 +651,45 @@ async function deleteDroidShowcasePhoto(env, id) {
   await env.DATA.delete(`droidshowcasephoto:${id}`);
 }
 
+// --- Per-droid build log (diary-style, owner posts, admin can moderate) --
+// A running, periodically-updated diary of progress entries for one
+// specific "Our Droids" showcase entry — separate from the general,
+// club-wide Build Logs tab above. Only that showcase entry's owner can post
+// or edit entries here; an admin can remove any entry to moderate (same
+// ownerId-gated pattern used everywhere else). Every entry belongs to one
+// droidId, but — matching the buildLogs/galleryindex/memberFilesIndex
+// pattern — they all live in a single index key and are filtered down to
+// one droid's entries when a droid's page is rendered.
+
+async function getDroidBuildLogEntries(env) {
+  const raw = await env.DATA.get('droidBuildLogIndex');
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveDroidBuildLogEntries(env, entries) {
+  await env.DATA.put('droidBuildLogIndex', JSON.stringify(entries));
+}
+
+async function saveDroidBuildLogPhoto(env, entryId, contentType, base64Data) {
+  await env.DATA.put(`droidbuildlogphoto:${entryId}`, JSON.stringify({ contentType, data: base64Data }));
+}
+
+async function getDroidBuildLogPhoto(env, entryId) {
+  const raw = await env.DATA.get(`droidbuildlogphoto:${entryId}`);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+async function deleteDroidBuildLogPhoto(env, entryId) {
+  await env.DATA.delete(`droidbuildlogphoto:${entryId}`);
+}
+
 // --- Events (admin-editable) --------------------------------------------
 
 async function getEvents(env) {
@@ -1529,7 +1568,10 @@ function droidsTabHTML(droidShowcase, currentUser, error, notice, editId, droidT
         <div class="body">
           <h4>${esc(d.droidName || d.droidType)}</h4>
           <p>${d.droidName ? `${esc(d.droidType)} &middot; ` : ''}Built by ${esc(d.builderName)}${d.caption ? ` &mdash; ${esc(d.caption)}` : ''}</p>
-          ${d.ownerId === currentUser.id ? `<p style="margin-top:6px;"><a class="btn-small" href="/members/dashboard?tab=droids&edit=${encodeURIComponent(d.id)}">Edit</a></p>` : ''}
+          <p style="margin-top:6px;">
+            <a class="btn-small" href="/droid/${esc(d.id)}">Build Log</a>
+            ${d.ownerId === currentUser.id ? ` <a class="btn-small" href="/members/dashboard?tab=droids&edit=${encodeURIComponent(d.id)}">Edit</a>` : ''}
+          </p>
         </div>
       </div>`).join('')}</div>`;
 
@@ -1613,6 +1655,276 @@ function filesTabHTML(files, categories) {
     </section>`).join('');
 }
 
+// --- Shared nav/footer for the dynamic PUBLIC pages below (member profile,
+// droid build log) — copied from the markup that's hard-coded into each
+// static public HTML file (about.html, index.html, gallery.html), since
+// those two pages don't have a static file of their own: their content is
+// per-member/per-droid, so the Worker renders the whole page.
+function publicSiteNav() {
+  return `
+<div class="site-nav">
+  <a class="brand" href="/">
+    <img src="/img/logo-nav.png" alt="Norwich Droids logo">
+    <div class="wordmark">NORWICH<br><span>DROIDS</span></div>
+  </a>
+  <div class="links">
+    <a href="/">Home</a>
+    <a href="/about.html">About</a>
+    <a href="/events.html">Events</a>
+    <a href="/gallery.html">Gallery</a>
+    <a class="btn btn-primary" href="/members/login">Members Login</a>
+  </div>
+</div>`;
+}
+
+function publicSiteFooter() {
+  return `
+<div class="site-footer">
+  <div class="brand">
+    <img src="/img/logo2-badge.png" alt="Norwich Droids emblem">
+    <div class="text">Norwich Droids &mdash; Norfolk, UK</div>
+  </div>
+  <div class="footer-social">
+    <a href="https://www.facebook.com/profile.php?id=100032848076073" target="_blank" rel="noopener" aria-label="Norwich Droids on Facebook">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13.5 21v-7.5h2.5l.5-3h-3V8.5c0-.9.3-1.5 1.6-1.5H16V4.3C15.7 4.3 14.7 4 13.6 4c-2.3 0-3.9 1.4-3.9 4v2.5H7v3h2.7V21h3.8z"/></svg>
+    </a>
+    <a href="https://www.instagram.com/norwich_droids" target="_blank" rel="noopener" aria-label="Norwich Droids on Instagram">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="currentColor" stroke="none"/></svg>
+    </a>
+    <a href="https://www.tiktok.com/@norwichdroids" target="_blank" rel="noopener" aria-label="Norwich Droids on TikTok">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 2h3a5.5 5.5 0 0 0 4.5 4.9V10a8.6 8.6 0 0 1-4.5-1.3v6.8a5.9 5.9 0 1 1-5.9-5.9c.2 0 .4 0 .6.02V13a2.9 2.9 0 1 0 2.3 2.9V2z"/></svg>
+    </a>
+  </div>
+  <div class="text">info@norwichdroids.co.uk</div>
+</div>`;
+}
+
+// Public, dedicated profile page for one member — linked from their card on
+// the About page's "Meet the Members" section. Shows only the same public
+// fields as /api/members, plus the two optional detail fields a member can
+// fill in from My Account — never email, password data, or anything else
+// account-related.
+function memberProfileHTML(member, theirDroids) {
+  const displayName = member.nickname ? `${member.name} (${member.nickname})` : member.name;
+  const photo = member.hasPhoto
+    ? `<img class="profile-photo" src="/public/member-photo/${esc(member.id)}?v=${esc(member.photoUpdatedAt || 0)}" alt="${esc(member.name)}">`
+    : `<div class="profile-photo profile-photo-placeholder">${esc(initials(member.name))}</div>`;
+
+  const builds = theirDroids.length === 0 ? '' : `
+<div class="container-narrow" style="margin-bottom:40px;">
+  <h2 style="font-family:'Exo 2',sans-serif; font-weight:700; font-size:20px; margin-bottom:18px;">Their Builds</h2>
+  <div class="card-grid">${theirDroids.map((d) => `
+    <a class="card" href="/droid/${esc(d.id)}" style="display:block; color:inherit; text-decoration:none;">
+      <div class="thumb"><img src="/public/droid-photo/${esc(d.id)}" alt="${esc(d.droidName || d.droidType)}" loading="lazy"></div>
+      <div class="body">
+        <h4>${esc(d.droidName || d.droidType)}</h4>
+        <p>${d.droidName ? esc(d.droidType) : 'View build log'}</p>
+      </div>
+    </a>`).join('')}</div>
+</div>`;
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(displayName)} — Norwich Droids</title>
+<meta name="description" content="Norwich Droids member profile for ${esc(displayName)}.">
+${HEAD}
+</head>
+<body>
+${publicSiteNav()}
+<main>
+<div class="page-header" style="padding-bottom:36px;">
+  <div class="profile-hero">
+    ${photo}
+    <div>
+      <h1 style="margin-bottom:4px;">${esc(displayName)}</h1>
+      ${member.droid ? `<p class="lede" style="margin-bottom:0;">${esc(member.droid)}</p>` : ''}
+    </div>
+  </div>
+</div>
+
+${member.bio ? `
+<div class="container-narrow" style="margin-bottom:36px;">
+  <h2 style="font-family:'Exo 2',sans-serif; font-weight:700; font-size:20px; margin-bottom:12px;">About</h2>
+  <p style="font-size:15px; line-height:1.75; color:#4a4739; margin:0;">${esc(member.bio)}</p>
+</div>` : ''}
+
+${member.howStarted ? `
+<div class="container-narrow" style="margin-bottom:36px;">
+  <h2 style="font-family:'Exo 2',sans-serif; font-weight:700; font-size:20px; margin-bottom:12px;">How I Got Into The Hobby</h2>
+  <p style="font-size:15px; line-height:1.75; color:#4a4739; margin:0;">${esc(member.howStarted)}</p>
+</div>` : ''}
+
+${member.interests ? `
+<div class="container-narrow" style="margin-bottom:36px;">
+  <h2 style="font-family:'Exo 2',sans-serif; font-weight:700; font-size:20px; margin-bottom:12px;">Interests</h2>
+  <p style="font-size:15px; line-height:1.75; color:#4a4739; margin:0;">${esc(member.interests)}</p>
+</div>` : ''}
+
+${builds}
+
+<div class="container-narrow" style="padding-bottom:80px;">
+  <a class="btn btn-outline-accent" href="/about.html">&larr; Back to Meet the Members</a>
+</div>
+</main>
+${publicSiteFooter()}
+</body>
+</html>`;
+}
+
+// Public, dedicated diary-style build log page for one "Our Droids"
+// showcase entry — linked from that droid's card on the public homepage
+// and from its builder's profile page above. Viewing is public; only the
+// droid's owner can post or edit entries, and the owner or an admin can
+// delete one (same ownerId-gated pattern used everywhere else on the
+// site). The crop/rotate photo editor is only loaded when there's actually
+// a file input on the page (the owner's own add/edit form), matching how
+// PHOTO_EDITOR_HEAD is kept off every other public page.
+function droidBuildLogHTML({ droid, entries, currentUser, error, notice, editingEntryId }) {
+  const isOwner = !!currentUser && currentUser.id === droid.ownerId;
+  const isModerator = !!currentUser && currentUser.role === 'admin' && !isOwner;
+  const editingEntry = editingEntryId && isOwner ? entries.find((e) => e.id === editingEntryId) : null;
+
+  const sorted = [...entries].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  const entryHTML = (e) => `
+    <div class="diary-entry">
+      <div class="diary-entry-date">${esc(formatDateTime(new Date(e.createdAt).getTime()))}${e.updatedAt ? ' &middot; edited' : ''}</div>
+      ${e.hasPhoto ? `<div class="diary-entry-photo"><img src="/public/droid-log-photo/${esc(e.id)}" alt="" loading="lazy"></div>` : ''}
+      <p class="diary-entry-text">${esc(e.text)}</p>
+      ${isOwner ? `
+      <div class="diary-entry-actions">
+        <a class="btn-small" href="/droid/${esc(droid.id)}?edit=${encodeURIComponent(e.id)}">Edit</a>
+        <form method="post" action="/droid/${esc(droid.id)}/log/delete" onsubmit="return false;" data-confirm="Delete this diary entry? This cannot be undone.">
+          <input type="hidden" name="entry_id" value="${esc(e.id)}">
+          <button type="submit" class="btn-small btn-danger">Delete</button>
+        </form>
+      </div>` : isModerator ? `
+      <div class="diary-entry-actions">
+        <form method="post" action="/droid/${esc(droid.id)}/log/delete" onsubmit="return false;" data-confirm="Remove this diary entry? This cannot be undone.">
+          <input type="hidden" name="entry_id" value="${esc(e.id)}">
+          <button type="submit" class="btn-small btn-danger">Remove (Admin)</button>
+        </form>
+      </div>` : ''}
+    </div>`;
+
+  const feed = sorted.length === 0
+    ? `<p class="sub">No diary entries yet.${isOwner ? ' Add the first update below.' : ''}</p>`
+    : sorted.map(entryHTML).join('');
+
+  // Shown above the feed for EVERYONE, not just the owner — a rejection
+  // message (wrong owner, entry not found) is meaningful to whoever
+  // triggered it, even if that person doesn't get the add/edit form below.
+  const banner = `${error ? `<div class="login-error" style="margin-bottom:18px;">${esc(error)}</div>` : ''}${notice ? `<div class="admin-success" style="margin-bottom:18px;">${esc(notice)}</div>` : ''}`;
+
+  const ownerForm = isOwner ? `
+  <div class="login-card" style="max-width:520px; margin:32px 0 0;">
+    <h1 style="font-size:16px; text-align:left;">${editingEntry ? 'Edit Diary Entry' : 'Add Diary Entry'}</h1>
+    <form method="post" action="${editingEntry ? `/droid/${esc(droid.id)}/log/update` : `/droid/${esc(droid.id)}/log/add`}" enctype="multipart/form-data">
+      ${editingEntry ? `<input type="hidden" name="entry_id" value="${esc(editingEntry.id)}">` : ''}
+      <div class="field">
+        <label for="log_text">Update</label>
+        <textarea id="log_text" name="text" rows="5" maxlength="2000" placeholder="What did you work on? How did you make it?" required>${editingEntry ? esc(editingEntry.text) : ''}</textarea>
+      </div>
+      <div class="field">
+        <label for="log_photo">Photo <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional${editingEntry ? ' — leave blank to keep the current photo' : ''})</span></label>
+        <input type="file" id="log_photo" name="photo" accept="image/jpeg,image/png,image/webp" data-photo-editor>
+        ${editingEntry && editingEntry.hasPhoto ? `
+        <label style="font-weight:400; text-transform:none; letter-spacing:0; display:flex; align-items:center; gap:6px; margin-top:8px;">
+          <input type="checkbox" name="remove_photo" value="1" style="width:auto;"> Remove current photo
+        </label>` : ''}
+      </div>
+      <button type="submit" class="btn btn-primary">${editingEntry ? 'Save Changes' : 'Post Update'}</button>
+      ${editingEntry ? `<a href="/droid/${esc(droid.id)}" class="btn-small" style="margin-left:10px;">Cancel</a>` : ''}
+    </form>
+  </div>` : (!currentUser ? `<p class="sub" style="margin-top:24px;"><a href="/members/login">Log in</a> as this droid's owner to post diary updates.</p>` : '');
+
+  const photoHead = isOwner ? PHOTO_EDITOR_HEAD : '';
+  const photoScript = isOwner ? photoEditorMarkup() : '';
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(droid.droidName || droid.droidType)} Build Log — Norwich Droids</title>
+<meta name="description" content="Build log for ${esc(droid.droidName || droid.droidType)}, built by ${esc(droid.builderName)}.">
+${HEAD}${photoHead}
+</head>
+<body>
+${publicSiteNav()}
+<main>
+<div class="page-header" style="padding-bottom:0;">
+  <h1>${esc(droid.droidName || droid.droidType)} &mdash; Build Log</h1>
+  <p class="lede">${droid.droidName ? `${esc(droid.droidType)} &middot; ` : ''}Built by ${droid.ownerId ? `<a href="/member/${esc(droid.ownerId)}">${esc(droid.builderName)}</a>` : esc(droid.builderName)}</p>
+  ${droid.caption ? `<p class="note" style="font-style:normal;">${esc(droid.caption)}</p>` : ''}
+</div>
+
+<div class="container-narrow" style="padding-bottom:80px;">
+  <div class="card" style="max-width:420px; margin:0 auto 36px;">
+    <div class="thumb" id="bl-thumb" style="cursor:pointer; height:auto; aspect-ratio:1;"><img src="/public/droid-photo/${esc(droid.id)}" alt="${esc(droid.droidName || droid.droidType)}"></div>
+  </div>
+
+  <h2 style="font-family:'Exo 2',sans-serif; font-weight:700; font-size:20px; margin-bottom:6px;">Diary</h2>
+  <p class="sub" style="margin:0 0 18px;">Progress updates from ${esc(droid.builderName)}, newest first.</p>
+  ${banner}
+  <div id="diary-feed">${feed}</div>
+
+  ${ownerForm}
+
+  <p style="margin-top:36px;"><a class="btn btn-outline-accent" href="/">&larr; Back to Our Droids</a></p>
+</div>
+</main>
+${publicSiteFooter()}
+
+<div class="lightbox" id="lightbox" hidden>
+  <button type="button" class="lightbox-close" id="lightbox-close" aria-label="Close">&times;</button>
+  <img id="lightbox-img" src="" alt="">
+  <div class="lightbox-caption" id="lightbox-caption"></div>
+</div>
+<script>
+(function () {
+  var lightbox = document.getElementById('lightbox');
+  var lightboxImg = document.getElementById('lightbox-img');
+  var lightboxClose = document.getElementById('lightbox-close');
+
+  function openLightbox(src, alt) {
+    lightboxImg.src = src;
+    lightboxImg.alt = alt || '';
+    lightbox.hidden = false;
+  }
+  function closeLightbox() {
+    lightbox.hidden = true;
+    lightboxImg.src = '';
+  }
+  lightbox.addEventListener('click', closeLightbox);
+  lightboxImg.addEventListener('click', function (e) { e.stopPropagation(); });
+  lightboxClose.addEventListener('click', closeLightbox);
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && !lightbox.hidden) closeLightbox();
+  });
+  document.querySelectorAll('#bl-thumb img, .diary-entry-photo img').forEach(function (img) {
+    img.parentElement.style.cursor = 'pointer';
+    img.parentElement.addEventListener('click', function () { openLightbox(img.src, img.alt); });
+  });
+
+  document.querySelectorAll('form[data-confirm]').forEach(function (f) {
+    f.addEventListener('submit', function () {
+      if (confirm(f.dataset.confirm)) {
+        f.removeAttribute('onsubmit');
+        HTMLFormElement.prototype.submit.call(f);
+      }
+    });
+  });
+})();
+</script>
+${photoScript}
+</body>
+</html>`;
+}
+
 function dashNav(active, currentUser) {
   return `
 <div class="dash-nav">
@@ -1654,7 +1966,7 @@ ${photoEditorMarkup()}
 }
 
 function changePasswordHTML(currentUser, state = {}) {
-  const { pwError, pwSuccess, photoError, photoSuccess, bioError, bioSuccess, nicknameError, nicknameSuccess } = state;
+  const { pwError, pwSuccess, photoError, photoSuccess, bioError, bioSuccess, nicknameError, nicknameSuccess, detailsError, detailsSuccess } = state;
   return `<!doctype html>
 <html lang="en"><head>${HEAD}${PHOTO_EDITOR_HEAD}<title>My Account — Norwich Droids</title></head>
 <body>
@@ -1711,6 +2023,24 @@ ${dashNav('change-password', currentUser)}
       <button type="submit" class="btn btn-primary">Save Description</button>
     </form>
     <p style="font-size:12.5px; color:var(--muted); margin:14px 0 0;">Shown on the public About page alongside your name and droid, once you've saved one. Leave it blank to not show a description.</p>
+  </div>
+
+  <div class="login-card" style="max-width:420px; margin:0 0 28px;">
+    <h1 style="font-size:16px; text-align:left;">More About You</h1>
+    ${detailsError ? `<div class="login-error">${esc(detailsError)}</div>` : ''}
+    ${detailsSuccess ? `<div class="admin-success">${esc(detailsSuccess)}</div>` : ''}
+    <form method="post" action="/members/account/details">
+      <div class="field">
+        <label for="how_started">How I got into the hobby <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span></label>
+        <textarea id="how_started" name="how_started" rows="3" maxlength="600" placeholder="e.g. Saw an R2 unit at a convention and had to build one.">${esc(currentUser.howStarted || '')}</textarea>
+      </div>
+      <div class="field">
+        <label for="interests">Interests <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span></label>
+        <textarea id="interests" name="interests" rows="2" maxlength="300" placeholder="e.g. 3D printing, electronics, costuming">${esc(currentUser.interests || '')}</textarea>
+      </div>
+      <button type="submit" class="btn btn-primary">Save Details</button>
+    </form>
+    <p style="font-size:12.5px; color:var(--muted); margin:14px 0 0;">Shown as separate sections on your public member profile page, once you've saved them. Leave either blank to not show that section.</p>
   </div>
 
   <div class="login-card" style="max-width:420px; margin:0;">
@@ -1813,6 +2143,14 @@ ${dashNav('admin', currentUser)}
       <div class="field">
         <label for="edit_bio">About <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — shown on the public About page)</span></label>
         <textarea id="edit_bio" name="bio" rows="3" maxlength="500">${esc(editingUser.bio || '')}</textarea>
+      </div>
+      <div class="field">
+        <label for="edit_how_started">How they got into the hobby <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — shown on their public profile page)</span></label>
+        <textarea id="edit_how_started" name="how_started" rows="3" maxlength="600">${esc(editingUser.howStarted || '')}</textarea>
+      </div>
+      <div class="field">
+        <label for="edit_interests">Interests <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — shown on their public profile page)</span></label>
+        <textarea id="edit_interests" name="interests" rows="2" maxlength="300">${esc(editingUser.interests || '')}</textarea>
       </div>
       <div class="field">
         <label for="edit_photo">Profile Photo</label>
@@ -2546,6 +2884,40 @@ export default {
       });
     }
 
+    // Photos attached to individual build-log diary entries — same public,
+    // short-cache treatment as the droid's own showcase photo above.
+    if (path.startsWith('/public/droid-log-photo/') && request.method === 'GET') {
+      const entryId = path.slice('/public/droid-log-photo/'.length);
+      const photo = await getDroidBuildLogPhoto(env, entryId);
+      if (!photo) return htmlResponse('Not found.', 404);
+      const bytes = base64ToBytes(photo.data);
+      return new Response(bytes, {
+        status: 200,
+        headers: {
+          'Content-Type': photo.contentType,
+          'Cache-Control': 'public, max-age=300',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
+    }
+
+    // Public, dedicated diary-style build log page for one "Our Droids"
+    // showcase entry. Viewing needs no session; getSessionUser is only used
+    // here to decide whether to show the owner's add/edit form or an
+    // admin's moderation controls — see droidBuildLogHTML above.
+    const droidPageMatch = path.match(/^\/droid\/([^/]+)$/);
+    if (droidPageMatch && request.method === 'GET') {
+      const droidId = droidPageMatch[1];
+      const droidShowcase = await getDroidShowcase(env);
+      const droid = droidShowcase.find((d) => d.id === droidId);
+      if (!droid) return htmlResponse('Not found.', 404);
+      const currentUser = await getSessionUser(request, env);
+      const allEntries = await getDroidBuildLogEntries(env);
+      const entries = allEntries.filter((e) => e.droidId === droidId);
+      const editId = url.searchParams.get('edit') || '';
+      return htmlResponse(droidBuildLogHTML({ droid, entries, currentUser, error: '', notice: '', editingEntryId: editId }));
+    }
+
     // Public, no login required — powers the public About page's "Meet the
     // Members" photos. This is deliberately a SEPARATE route from
     // /members/photo/<id> below (which stays session-gated, for the
@@ -2566,6 +2938,18 @@ export default {
           'X-Content-Type-Options': 'nosniff',
         },
       });
+    }
+
+    // Public, dedicated profile page for one member — linked from their
+    // card on the About page's "Meet the Members" section.
+    const memberProfileMatch = path.match(/^\/member\/([^/]+)$/);
+    if (memberProfileMatch && request.method === 'GET') {
+      const memberId = memberProfileMatch[1];
+      const member = await getUserById(env, memberId);
+      if (!member) return htmlResponse('Not found.', 404);
+      const droidShowcase = await getDroidShowcase(env);
+      const theirDroids = droidShowcase.filter((d) => d.ownerId === memberId);
+      return htmlResponse(memberProfileHTML(member, theirDroids));
     }
 
     // --- One-time bootstrap: create the first admin account -------------
@@ -3056,6 +3440,164 @@ export default {
       return await renderWith('', 'Droid entry updated.');
     }
 
+    // --- Per-droid build log (diary-style) — these live under
+    // /droid/<id>/log/... rather than /members/..., since they belong to
+    // the public build-log page above, but every one of them still needs a
+    // session: add/update are owner-only, delete allows the owner OR an
+    // admin (moderation), same as elsewhere on the site.
+
+    const droidLogAddMatch = path.match(/^\/droid\/([^/]+)\/log\/add$/);
+    if (droidLogAddMatch && request.method === 'POST') {
+      const droidId = droidLogAddMatch[1];
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      const droidShowcase = await getDroidShowcase(env);
+      const droid = droidShowcase.find((d) => d.id === droidId);
+      if (!droid) return htmlResponse('Not found.', 404);
+
+      const renderWith = async (error, notice) => {
+        const allEntries = await getDroidBuildLogEntries(env);
+        const entries = allEntries.filter((e) => e.droidId === droidId);
+        return htmlResponse(droidBuildLogHTML({ droid, entries, currentUser, error, notice, editingEntryId: '' }));
+      };
+
+      // Ownership is checked server-side, not just hidden in the UI — a
+      // member can't post to another member's droid by forging the URL.
+      if (droid.ownerId !== currentUser.id) {
+        return await renderWith("Only this droid's owner can post a diary update.", '');
+      }
+
+      const form = await request.formData();
+      const text = String(form.get('text') || '').trim().slice(0, 2000);
+      if (!text) {
+        return await renderWith('Enter an update before posting.', '');
+      }
+      const file = form.get('photo');
+      const hasFile = file && typeof file !== 'string' && file.size;
+      const entryId = crypto.randomUUID();
+      let hasPhoto = false;
+      if (hasFile) {
+        if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
+          return await renderWith('Photos must be JPEG, PNG, or WEBP.', '');
+        }
+        if (file.size > MAX_PHOTO_UPLOAD_BYTES) {
+          return await renderWith('That photo is too large to upload — please use a file under 8MB.', '');
+        }
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const mismatch = imageMismatchMessage(bytes, file.type);
+        if (mismatch) {
+          return await renderWith(mismatch, '');
+        }
+        const prepared = await prepareUploadedPhoto(bytes, file.type);
+        if (prepared.errorMessage) {
+          return await renderWith(prepared.errorMessage, '');
+        }
+        await saveDroidBuildLogPhoto(env, entryId, prepared.contentType, bytesToBase64(prepared.bytes));
+        hasPhoto = true;
+      }
+
+      const allEntries = await getDroidBuildLogEntries(env);
+      allEntries.unshift({ id: entryId, droidId, text, hasPhoto, createdAt: new Date().toISOString(), ownerId: currentUser.id });
+      await saveDroidBuildLogEntries(env, allEntries);
+      return await renderWith('', 'Diary entry posted.');
+    }
+
+    // A member editing their OWN diary entry (ownerId-gated, checked against
+    // both the entry and the droid — in practice always the same person).
+    const droidLogUpdateMatch = path.match(/^\/droid\/([^/]+)\/log\/update$/);
+    if (droidLogUpdateMatch && request.method === 'POST') {
+      const droidId = droidLogUpdateMatch[1];
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      const droidShowcase = await getDroidShowcase(env);
+      const droid = droidShowcase.find((d) => d.id === droidId);
+      if (!droid) return htmlResponse('Not found.', 404);
+
+      const renderWith = async (error, notice, editingEntryId) => {
+        const allEntries = await getDroidBuildLogEntries(env);
+        const entries = allEntries.filter((e) => e.droidId === droidId);
+        return htmlResponse(droidBuildLogHTML({ droid, entries, currentUser, error, notice, editingEntryId: editingEntryId || '' }));
+      };
+
+      const form = await request.formData();
+      const entryId = String(form.get('entry_id') || '');
+      const allEntries = await getDroidBuildLogEntries(env);
+      const entry = allEntries.find((e) => e.id === entryId && e.droidId === droidId);
+      if (!entry || entry.ownerId !== currentUser.id || droid.ownerId !== currentUser.id) {
+        return await renderWith('You can only edit your own diary entries.', '');
+      }
+
+      const text = String(form.get('text') || '').trim().slice(0, 2000);
+      if (!text) {
+        return await renderWith('Enter an update before saving.', '', entryId);
+      }
+
+      const file = form.get('photo');
+      const hasFile = file && typeof file !== 'string' && file.size;
+      if (hasFile) {
+        if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
+          return await renderWith('Photos must be JPEG, PNG, or WEBP.', '', entryId);
+        }
+        if (file.size > MAX_PHOTO_UPLOAD_BYTES) {
+          return await renderWith('That photo is too large to upload — please use a file under 8MB.', '', entryId);
+        }
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const mismatch = imageMismatchMessage(bytes, file.type);
+        if (mismatch) {
+          return await renderWith(mismatch, '', entryId);
+        }
+        const prepared = await prepareUploadedPhoto(bytes, file.type);
+        if (prepared.errorMessage) {
+          return await renderWith(prepared.errorMessage, '', entryId);
+        }
+        await saveDroidBuildLogPhoto(env, entryId, prepared.contentType, bytesToBase64(prepared.bytes));
+        entry.hasPhoto = true;
+      } else if (form.get('remove_photo') === '1') {
+        await deleteDroidBuildLogPhoto(env, entryId);
+        entry.hasPhoto = false;
+      }
+
+      entry.text = text;
+      entry.updatedAt = new Date().toISOString();
+      await saveDroidBuildLogEntries(env, allEntries);
+      return await renderWith('', 'Diary entry updated.');
+    }
+
+    // Delete allows the entry's own owner OR an admin (moderation) — the
+    // one diary route that isn't owner-only, matching how Admin > Droids
+    // can remove any showcase entry regardless of who added it.
+    const droidLogDeleteMatch = path.match(/^\/droid\/([^/]+)\/log\/delete$/);
+    if (droidLogDeleteMatch && request.method === 'POST') {
+      const droidId = droidLogDeleteMatch[1];
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      const droidShowcase = await getDroidShowcase(env);
+      const droid = droidShowcase.find((d) => d.id === droidId);
+      if (!droid) return htmlResponse('Not found.', 404);
+
+      const form = await request.formData();
+      const entryId = String(form.get('entry_id') || '');
+      const allEntries = await getDroidBuildLogEntries(env);
+      const entry = allEntries.find((e) => e.id === entryId && e.droidId === droidId);
+      if (!entry) return htmlResponse('Not found.', 404);
+
+      const isEntryOwner = entry.ownerId === currentUser.id;
+      const isAdmin = currentUser.role === 'admin';
+      if (!isEntryOwner && !isAdmin) {
+        return htmlResponse('<p>You can only delete your own diary entries.</p>', 403);
+      }
+
+      const remaining = allEntries.filter((e) => e.id !== entryId);
+      await saveDroidBuildLogEntries(env, remaining);
+      await deleteDroidBuildLogPhoto(env, entryId);
+
+      const entries = remaining.filter((e) => e.droidId === droidId);
+      return htmlResponse(droidBuildLogHTML({ droid, entries, currentUser, error: '', notice: 'Diary entry deleted.', editingEntryId: '' }));
+    }
+
     // Any logged-in member can propose an event; it only reaches the real
     // calendar once an admin approves it from Admin > Events.
     if (path === '/members/events/submit' && request.method === 'POST') {
@@ -3173,6 +3715,19 @@ export default {
       return htmlResponse(changePasswordHTML(currentUser, { bioSuccess: bio ? 'Description updated.' : 'Description cleared.' }));
     }
 
+    if (path === '/members/account/details' && request.method === 'POST') {
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      const form = await request.formData();
+      const howStarted = String(form.get('how_started') || '').trim().slice(0, 600);
+      const interests = String(form.get('interests') || '').trim().slice(0, 300);
+      currentUser.howStarted = howStarted;
+      currentUser.interests = interests;
+      await saveUser(env, currentUser);
+      return htmlResponse(changePasswordHTML(currentUser, { detailsSuccess: (howStarted || interests) ? 'Details updated.' : 'Details cleared.' }));
+    }
+
     if (path === '/members/account/nickname' && request.method === 'POST') {
       const currentUser = await getSessionUser(request, env);
       if (!currentUser) return redirect('/members/login');
@@ -3284,6 +3839,8 @@ export default {
         // just editing the same profile from the other side.
         const nickname = String(form.get('nickname') || '').trim().slice(0, 40);
         const bio = String(form.get('bio') || '').trim().slice(0, 500);
+        const howStarted = String(form.get('how_started') || '').trim().slice(0, 600);
+        const interests = String(form.get('interests') || '').trim().slice(0, 300);
         if (!name || !email) {
           return htmlResponse(adminPageHTML({ currentUser, users, error: 'Name and email are required.', notice: '', generated: null, editingUser: target }), 400);
         }
@@ -3331,6 +3888,8 @@ export default {
         target.droid = droid;
         target.nickname = nickname;
         target.bio = bio;
+        target.howStarted = howStarted;
+        target.interests = interests;
         // Write the user record + new email mapping FIRST, then drop the old
         // mapping last — if anything fails partway, the account stays
         // reachable under one email or the other rather than neither.
@@ -3696,6 +4255,15 @@ export default {
         const remaining = droidShowcase.filter((d) => d.id !== droidId);
         await saveDroidShowcase(env, remaining);
         await deleteDroidShowcasePhoto(env, droidId);
+        // Cascade: also remove any build-log diary entries (and their
+        // photos) that belonged to this droid, so nothing orphaned lingers
+        // in KV once the droid entry itself is gone.
+        const allDiaryEntries = await getDroidBuildLogEntries(env);
+        const keptDiaryEntries = allDiaryEntries.filter((e) => e.droidId !== droidId);
+        if (keptDiaryEntries.length !== allDiaryEntries.length) {
+          await saveDroidBuildLogEntries(env, keptDiaryEntries);
+          await Promise.all(allDiaryEntries.filter((e) => e.droidId === droidId).map((e) => deleteDroidBuildLogPhoto(env, e.id)));
+        }
         return htmlResponse(adminDroidsHTML({ currentUser, droidShowcase: remaining, error: '', notice: 'Photo deleted.', droidTypes }));
       }
 
