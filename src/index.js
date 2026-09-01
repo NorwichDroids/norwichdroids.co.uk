@@ -1292,8 +1292,7 @@ function eventsTabHTML(events, rsvps, addedDroids, openEventId, error, notice, d
     ? `<p class="sub">No events on the calendar right now — an admin can add one, or suggest one yourself with the form on the right.</p>`
     : events.map((ev) => {
     const status = rsvps[ev.id] || 'undecided';
-    const goingClass = status === 'going' ? ' going' : '';
-    const rsvpLabel = status === 'going' ? 'Going' : (status === 'not-going' ? "Can't make it" : 'RSVP');
+    const statusLabel = status === 'going' ? "You're going" : (status === 'not-going' ? "You can't make it" : "You haven't responded yet");
     const droidsForEvent = [...ev.baseDroids, ...(Array.isArray(addedDroids[ev.id]) ? addedDroids[ev.id] : [])];
     const isOpen = openEventId === ev.id;
 
@@ -1309,10 +1308,27 @@ function eventsTabHTML(events, rsvps, addedDroids, openEventId, error, notice, d
             <div class="title">${esc(ev.title)}${ev.isPrivate ? ' <span class="badge-private">Private</span>' : ''}</div>
             <div class="loc">${esc(ev.location)}</div>
           </div>
-          <form method="post" action="/members/rsvp?tab=events">
-            <input type="hidden" name="event_id" value="${esc(ev.id)}">
-            <button type="submit" class="rsvp-btn${goingClass}">${esc(rsvpLabel)}</button>
-          </form>
+        </div>
+
+        <div class="rsvp-block rsvp-block-${status}">
+          <span class="rsvp-current">${esc(statusLabel)}</span>
+          <div class="rsvp-buttons">
+            <form method="post" action="/members/rsvp?tab=events">
+              <input type="hidden" name="event_id" value="${esc(ev.id)}">
+              <input type="hidden" name="status" value="going">
+              <button type="submit" class="rsvp-btn rsvp-going${status === 'going' ? ' active' : ''}">I'm Going</button>
+            </form>
+            <form method="post" action="/members/rsvp?tab=events">
+              <input type="hidden" name="event_id" value="${esc(ev.id)}">
+              <input type="hidden" name="status" value="not-going">
+              <button type="submit" class="rsvp-btn rsvp-not-going${status === 'not-going' ? ' active' : ''}">Can't Make It</button>
+            </form>
+            ${status !== 'undecided' ? `
+            <form method="post" action="/members/rsvp?tab=events">
+              <input type="hidden" name="event_id" value="${esc(ev.id)}">
+              <button type="submit" class="rsvp-clear">Clear response</button>
+            </form>` : ''}
+          </div>
         </div>
 
         <details${isOpen ? ' open' : ''}>
@@ -1556,6 +1572,25 @@ function galleryTabHTML(galleryItems, currentUser, error, notice, editId, events
     </div>`;
 }
 
+// Build status a droid's owner can set from its build log page (see
+// droidBuildLogHTML) — deliberately just metadata on the droid showcase
+// entry itself (droid.buildStatus), not a separate stored thing, so every
+// place that already renders a droid card can show the same badge with no
+// extra lookups. An entry with no status set (the default — old entries,
+// or an owner who never bothered) shows no badge at all rather than some
+// default label, so this stays opt-in and never looks like nagging.
+const BUILD_STATUSES = {
+  'planning': { label: 'Planning', className: 'status-planning' },
+  'in-progress': { label: 'In Progress', className: 'status-in-progress' },
+  'completed': { label: 'Completed', className: 'status-completed' },
+};
+
+function buildStatusBadge(status) {
+  const def = BUILD_STATUSES[status];
+  if (!def) return '';
+  return `<span class="status-badge ${def.className}">${esc(def.label)}</span>`;
+}
+
 function droidsTabHTML(droidShowcase, currentUser, error, notice, editId, droidTypes) {
   // Same owner-only edit rule as build logs / gallery above.
   const editingItem = editId ? droidShowcase.find((d) => d.id === editId && d.ownerId === currentUser.id) : null;
@@ -1566,7 +1601,7 @@ function droidsTabHTML(droidShowcase, currentUser, error, notice, editId, droidT
       <div class="card">
         <div class="thumb"><img src="/public/droid-photo/${esc(d.id)}" alt="${esc(d.droidName || d.droidType)}"></div>
         <div class="body">
-          <h4>${esc(d.droidName || d.droidType)}</h4>
+          <h4>${esc(d.droidName || d.droidType)} ${buildStatusBadge(d.buildStatus)}</h4>
           <p>${d.droidName ? `${esc(d.droidType)} &middot; ` : ''}Built by ${esc(d.builderName)}${d.caption ? ` &mdash; ${esc(d.caption)}` : ''}</p>
           <p style="margin-top:6px;">
             <a class="btn-small" href="/droid/${esc(d.id)}">Build Log</a>
@@ -1717,7 +1752,7 @@ function memberProfileHTML(member, theirDroids) {
     <a class="card" href="/droid/${esc(d.id)}" style="display:block; color:inherit; text-decoration:none;">
       <div class="thumb"><img src="/public/droid-photo/${esc(d.id)}" alt="${esc(d.droidName || d.droidType)}" loading="lazy"></div>
       <div class="body">
-        <h4>${esc(d.droidName || d.droidType)}</h4>
+        <h4>${esc(d.droidName || d.droidType)} ${buildStatusBadge(d.buildStatus)}</h4>
         <p>${d.droidName ? esc(d.droidType) : 'View build log'}</p>
       </div>
     </a>`).join('')}</div>
@@ -1841,6 +1876,19 @@ function droidBuildLogHTML({ droid, entries, currentUser, error, notice, editing
     </form>
   </div>` : (!currentUser ? `<p class="sub" style="margin-top:24px;"><a href="/members/login">Log in</a> as this droid's owner to post diary updates.</p>` : '');
 
+  const statusForm = isOwner ? `
+  <form method="post" action="/droid/${esc(droid.id)}/status" class="status-form">
+    <label for="build_status" style="font-size:12.5px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em;">Build Status</label>
+    <select id="build_status" name="status">
+      <option value=""${!droid.buildStatus ? ' selected' : ''}>&mdash; No status shown &mdash;</option>
+      <option value="planning"${droid.buildStatus === 'planning' ? ' selected' : ''}>Planning</option>
+      <option value="in-progress"${droid.buildStatus === 'in-progress' ? ' selected' : ''}>In Progress</option>
+      <option value="completed"${droid.buildStatus === 'completed' ? ' selected' : ''}>Completed</option>
+    </select>
+    <button type="submit" class="btn-small">Update Status</button>
+  </form>
+  <p style="font-size:12px; color:var(--muted); margin:8px 0 0;">Shown as a badge on this droid's card wherever it appears — Our Droids, your profile, and this page. Choose &quot;No status shown&quot; to hide the badge again.</p>` : '';
+
   const photoHead = isOwner ? PHOTO_EDITOR_HEAD : '';
   const photoScript = isOwner ? photoEditorMarkup() : '';
 
@@ -1857,7 +1905,7 @@ ${HEAD}${photoHead}
 ${publicSiteNav()}
 <main>
 <div class="page-header" style="padding-bottom:0;">
-  <h1>${esc(droid.droidName || droid.droidType)} &mdash; Build Log</h1>
+  <h1>${esc(droid.droidName || droid.droidType)} &mdash; Build Log ${buildStatusBadge(droid.buildStatus)}</h1>
   <p class="lede">${droid.droidName ? `${esc(droid.droidType)} &middot; ` : ''}Built by ${droid.ownerId ? `<a href="/member/${esc(droid.ownerId)}">${esc(droid.builderName)}</a>` : esc(droid.builderName)}</p>
   ${droid.caption ? `<p class="note" style="font-style:normal;">${esc(droid.caption)}</p>` : ''}
 </div>
@@ -1867,7 +1915,9 @@ ${publicSiteNav()}
     <div class="thumb" id="bl-thumb" style="cursor:pointer; height:auto; aspect-ratio:1;"><img src="/public/droid-photo/${esc(droid.id)}" alt="${esc(droid.droidName || droid.droidType)}"></div>
   </div>
 
-  <h2 style="font-family:'Exo 2',sans-serif; font-weight:700; font-size:20px; margin-bottom:6px;">Diary</h2>
+  ${statusForm}
+
+  <h2 style="font-family:'Exo 2',sans-serif; font-weight:700; font-size:20px; margin-bottom:6px; margin-top:${isOwner ? '28px' : '0'};">Diary</h2>
   <p class="sub" style="margin:0 0 18px;">Progress updates from ${esc(droid.builderName)}, newest first.</p>
   ${banner}
   <div id="diary-feed">${feed}</div>
@@ -2525,6 +2575,7 @@ function adminDroidsHTML({ currentUser, droidShowcase, error, notice, droidTypes
       <td>${esc(d.droidName || d.droidType)}${d.droidName ? `<div style="font-size:12px; color:var(--muted);">${esc(d.droidType)}</div>` : ''}</td>
       <td>${esc(d.builderName)}</td>
       <td style="white-space:normal; max-width:240px;">${d.caption ? esc(d.caption) : '<span style="color:var(--muted);">&mdash;</span>'}</td>
+      <td>${buildStatusBadge(d.buildStatus) || '<span style="color:var(--muted);">&mdash;</span>'}</td>
       <td class="admin-actions">
         <form method="post" action="/members/admin/droids/delete" onsubmit="return false;" data-photo="${esc(d.droidName || d.droidType)}">
           <input type="hidden" name="droid_id" value="${esc(d.id)}">
@@ -2560,8 +2611,8 @@ ${dashNav('admin', currentUser)}
 
   <div class="admin-table-wrap">
     <table class="admin-table">
-      <thead><tr><th>Photo</th><th>Droid</th><th>Builder</th><th>Caption</th><th>Actions</th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="5">No droid photos yet.</td></tr>`}</tbody>
+      <thead><tr><th>Photo</th><th>Droid</th><th>Builder</th><th>Caption</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="6">No droid photos yet.</td></tr>`}</tbody>
     </table>
   </div>
 </div>
@@ -2860,7 +2911,7 @@ export default {
     if (path === '/api/droids' && request.method === 'GET') {
       const droidShowcase = await getDroidShowcase(env);
       const publicItems = droidShowcase.map((d) => ({
-        id: d.id, droidType: d.droidType, droidName: d.droidName || '', caption: d.caption || '', builderName: d.builderName,
+        id: d.id, droidType: d.droidType, droidName: d.droidName || '', caption: d.caption || '', builderName: d.builderName, buildStatus: d.buildStatus || '',
       }));
       return new Response(JSON.stringify(publicItems), {
         status: 200,
@@ -3036,16 +3087,25 @@ export default {
       }));
     }
 
+    // Explicit "I'm Going" / "Can't Make It" / "Clear response" — each is
+    // its own button on the events tab (see eventsTabHTML) rather than one
+    // button that cycles through states, so a member always sees exactly
+    // what they're choosing rather than having to remember what the
+    // current label means before clicking it.
     if (path === '/members/rsvp' && request.method === 'POST') {
       const currentUser = await getSessionUser(request, env);
       if (!currentUser) return redirect('/members/login');
       const form = await request.formData();
       const eventId = String(form.get('event_id') || '');
+      const status = String(form.get('status') || '');
       const events = await getEvents(env);
       if (events.some((e) => e.id === eventId)) {
         const rsvps = await readJSON(env, 'rsvps');
-        const current = rsvps[eventId] || 'undecided';
-        rsvps[eventId] = current === 'going' ? 'not-going' : 'going';
+        if (status === 'going' || status === 'not-going') {
+          rsvps[eventId] = status;
+        } else {
+          delete rsvps[eventId];
+        }
         await writeJSON(env, 'rsvps', rsvps);
       }
       return redirect(`/members/dashboard?tab=${pickTab(url)}&open=${encodeURIComponent(eventId)}`);
@@ -3596,6 +3656,40 @@ export default {
 
       const entries = remaining.filter((e) => e.droidId === droidId);
       return htmlResponse(droidBuildLogHTML({ droid, entries, currentUser, error: '', notice: 'Diary entry deleted.', editingEntryId: '' }));
+    }
+
+    // Owner-only — sets (or clears) the "Planning / In Progress / Completed"
+    // badge shown on this droid's card everywhere it appears. Lives under
+    // /droid/<id>/status rather than the log/* routes above since it's
+    // metadata about the droid itself, not a diary entry.
+    const droidStatusMatch = path.match(/^\/droid\/([^/]+)\/status$/);
+    if (droidStatusMatch && request.method === 'POST') {
+      const droidId = droidStatusMatch[1];
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      const droidShowcase = await getDroidShowcase(env);
+      const droid = droidShowcase.find((d) => d.id === droidId);
+      if (!droid) return htmlResponse('Not found.', 404);
+
+      const renderWith = async (error, notice) => {
+        const allEntries = await getDroidBuildLogEntries(env);
+        const entries = allEntries.filter((e) => e.droidId === droidId);
+        return htmlResponse(droidBuildLogHTML({ droid, entries, currentUser, error, notice, editingEntryId: '' }));
+      };
+
+      if (droid.ownerId !== currentUser.id) {
+        return await renderWith("Only this droid's owner can update its build status.", '');
+      }
+
+      const form = await request.formData();
+      const status = String(form.get('status') || '');
+      if (status && !BUILD_STATUSES[status]) {
+        return await renderWith('Unrecognised build status.', '');
+      }
+      droid.buildStatus = status;
+      await saveDroidShowcase(env, droidShowcase);
+      return await renderWith('', status ? 'Build status updated.' : 'Build status badge hidden.');
     }
 
     // Any logged-in member can propose an event; it only reaches the real
