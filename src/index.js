@@ -147,7 +147,7 @@ const SEED_BUILD_LOGS = [
 // club's first admin has been created.
 const SETUP_TOKEN = '9856825dfffddf49fc0139a57840850be646264818193ba5';
 
-const TABS = ['events', 'directory', 'logs', 'gallery', 'droids'];
+const TABS = ['events', 'directory', 'logs', 'gallery', 'droids', 'files'];
 const SESSION_COOKIE = 'nd_session';
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 const PBKDF2_ITERATIONS = 100000;
@@ -176,6 +176,36 @@ const ALLOWED_PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 // multiplying that cost too far past what a single-photo upload already
 // costs.
 const MAX_GALLERY_PHOTOS_PER_UPLOAD = 4;
+
+// --- Members Area > Files (admin uploads, any member can download) -------
+// Stored the same base64-in-KV way as photos above, but unlike a photo,
+// these are never resized or re-encoded — a logo or a document needs to
+// come back out exactly as it was uploaded. That means the size cap has to
+// account for the full ~33% base64 overhead against KV's 25MB-per-value
+// ceiling up front, rather than relying on a resize step to shrink things
+// down first.
+const MAX_MEMBER_FILE_BYTES = 10 * 1024 * 1024; // 10MB raw -> ~13.3MB stored, comfortably under KV's 25MB cap
+// Seeds the "fileCategories" KV key the first time the site runs — same
+// seed-once, then-admin-managed pattern as DROID_OPTIONS/SEED_EVENTS above.
+const SEED_FILE_CATEGORIES = ['Logos', 'Templates', 'Documents'];
+// What can be uploaded to the Files page, keyed by the MIME type the
+// browser is expected to send. Each entry names the extension used for
+// downloads and a byte-signature check — the same never-trust-the-declared-
+// type reasoning as matchesDeclaredImageType above, extended to cover
+// PDF/Word/ZIP too. .docx is itself a ZIP container (Office Open XML), so
+// it shares its check with plain .zip files.
+const MEMBER_FILE_TYPES = {
+  'image/png': { ext: 'png', check: (b) => matchesDeclaredImageType(b, 'image/png') },
+  'image/jpeg': { ext: 'jpg', check: (b) => matchesDeclaredImageType(b, 'image/jpeg') },
+  'image/webp': { ext: 'webp', check: (b) => matchesDeclaredImageType(b, 'image/webp') },
+  'image/svg+xml': { ext: 'svg', check: looksLikeSvg },
+  'application/pdf': { ext: 'pdf', check: looksLikePdf },
+  'application/msword': { ext: 'doc', check: looksLikeOleContainer },
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': { ext: 'docx', check: looksLikeZipContainer },
+  'application/zip': { ext: 'zip', check: looksLikeZipContainer },
+  'application/x-zip-compressed': { ext: 'zip', check: looksLikeZipContainer },
+};
+const MEMBER_FILE_ACCEPT = '.png,.jpg,.jpeg,.webp,.svg,.pdf,.doc,.docx,.zip';
 
 function esc(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({
@@ -324,6 +354,58 @@ function imageMismatchMessage(bytes, declaredType) {
     return 'That looks like a HEIC/HEIF photo — the default format on newer iPhones — which this site can\'t read. On the phone: Settings > Camera > Formats > "Most Compatible" switches new photos to JPEG, or when picking an existing photo to upload, choose "Options" at the top of the picker and turn on "Automatic"/"Convert to JPEG" if offered. Then try uploading again.';
   }
   return "That file doesn't look like a valid image.";
+}
+
+// --- Byte-signature checks for the Files page's non-image types ----------
+// Same never-trust-the-declared-Content-Type reasoning as
+// matchesDeclaredImageType above, extended to the document/archive types
+// the Files page accepts.
+
+// SVG is XML text, not a fixed binary format, so there's no magic-byte
+// signature to check the way there is for a binary file — instead this
+// decodes a reasonable prefix and looks for an <svg tag, which tolerates a
+// leading byte-order mark, XML declaration, DOCTYPE, or comments (all
+// normal in a real SVG export) ahead of the actual element.
+function looksLikeSvg(bytes) {
+  const prefix = new TextDecoder('utf-8', { fatal: false }).decode(bytes.subarray(0, 2000));
+  return /<svg[\s>]/i.test(prefix);
+}
+
+function looksLikePdf(bytes) {
+  return bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46; // '%PDF'
+}
+
+// The old binary .doc format's container signature (also shared with
+// legacy .xls/.ppt, but this site only ever declares it for .doc).
+function looksLikeOleContainer(bytes) {
+  const sig = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
+  return sig.every((b, i) => bytes[i] === b);
+}
+
+// .docx is itself a ZIP container (Office Open XML) wearing a different
+// extension, so this one check legitimately covers both a real .zip and a
+// real .docx file — the two are indistinguishable at the byte-signature
+// level, which is expected, not a gap.
+function looksLikeZipContainer(bytes) {
+  const normal = bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+  const empty = bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x05 && bytes[3] === 0x06;
+  return normal || empty;
+}
+
+// Validates an admin's Files-page upload against MEMBER_FILE_TYPES. Returns
+// null when it's fine, or a message to show otherwise — an unrecognised
+// declared type is rejected before ever reading the bytes' signature (the
+// <input accept> attribute steers most people to a supported type anyway,
+// but the server never relies on that alone).
+function memberFileValidationError(declaredType, bytes) {
+  const spec = MEMBER_FILE_TYPES[declaredType];
+  if (!spec) {
+    return 'Please choose an image (PNG, JPEG, WEBP, or SVG), a PDF, a Word document (.doc or .docx), or a ZIP file.';
+  }
+  if (!spec.check(bytes)) {
+    return `That file doesn't look like a valid .${spec.ext} file — it may be corrupted, or saved under the wrong file extension.`;
+  }
+  return null;
 }
 
 // Shrinks an oversized photo down to fit MAX_PHOTO_BYTES instead of just
@@ -821,6 +903,105 @@ async function getBuildLogPhoto(env, logId) {
 
 async function deleteBuildLogPhoto(env, logId) {
   await env.DATA.delete(`buildlogphoto:${logId}`);
+}
+
+// --- Members Area > Files (admin uploads, any member downloads) ----------
+// Same index-plus-blob split as gallery/droid photos, but session-gated for
+// download rather than public — see /members/files/download/<id> below.
+
+async function getFileCategories(env) {
+  const raw = await env.DATA.get('fileCategories');
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    } catch { /* fall through to reseed */ }
+  }
+  await env.DATA.put('fileCategories', JSON.stringify(SEED_FILE_CATEGORIES));
+  return SEED_FILE_CATEGORIES;
+}
+
+async function saveFileCategories(env, categories) {
+  await env.DATA.put('fileCategories', JSON.stringify(categories));
+}
+
+async function getMemberFiles(env) {
+  const raw = await env.DATA.get('memberFilesIndex');
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveMemberFiles(env, files) {
+  await env.DATA.put('memberFilesIndex', JSON.stringify(files));
+}
+
+async function saveMemberFileBlob(env, id, contentType, base64Data) {
+  await env.DATA.put(`memberfile:${id}`, JSON.stringify({ contentType, data: base64Data }));
+}
+
+async function getMemberFileBlob(env, id) {
+  const raw = await env.DATA.get(`memberfile:${id}`);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+async function deleteMemberFileBlob(env, id) {
+  await env.DATA.delete(`memberfile:${id}`);
+}
+
+// Groups files into per-category "boxes" for the members-area Files tab —
+// same shape and fallback behaviour as groupGalleryItemsByEvent above.
+// Alphabetical by category name (files don't have an inherent date-based
+// order the way events do), with a trailing Uncategorized group for
+// anything with no category, or one that's since been deleted from the
+// category list (it stays tagged with that name in storage, but no longer
+// matches anything in `categories`, so it falls back here automatically —
+// same as a gallery photo tagged to a deleted event).
+function groupFilesByCategory(files, categories) {
+  const known = new Set(categories || []);
+  const uncategorized = [];
+  const byCategory = new Map();
+  for (const f of files) {
+    if (!f.category || !known.has(f.category)) {
+      uncategorized.push(f);
+      continue;
+    }
+    if (!byCategory.has(f.category)) byCategory.set(f.category, []);
+    byCategory.get(f.category).push(f);
+  }
+  const groups = [...byCategory.entries()]
+    .map(([category, categoryFiles]) => ({ category, files: categoryFiles }))
+    .sort((a, b) => a.category.localeCompare(b.category));
+  if (uncategorized.length > 0) groups.push({ category: null, files: uncategorized });
+  return groups;
+}
+
+function formatFileSize(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// Builds a safe download filename from the file's title (never the raw
+// browser-supplied original name, which isn't sanitized for filesystem-
+// unsafe characters) plus its stored extension.
+function safeFileName(title, ext) {
+  const base = String(title || '').replace(/[\\/:*?"<>|]+/g, '-').trim().slice(0, 80);
+  return `${base || 'file'}.${ext}`;
+}
+
+// A Content-Disposition value that works for both plain-ASCII and
+// non-ASCII titles: an ASCII-only fallback for older clients (filename=),
+// plus the real UTF-8 name every modern browser actually uses (filename*=,
+// per RFC 5987).
+function contentDispositionHeader(filename) {
+  const asciiFallback = filename.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, "'");
+  return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }
 
 // Session values carry the user's sessionVersion at login time, so that
@@ -1397,6 +1578,41 @@ function droidsTabHTML(droidShowcase, currentUser, error, notice, editId, droidT
     </div>`;
 }
 
+// Options for the category <select> on the Admin > Files upload/edit form —
+// same shape as eventPickerOptions above (a fixed "none of these" choice
+// first, then the current list).
+function fileCategoryOptions(categories, selectedCategory) {
+  const noneSelected = !selectedCategory ? ' selected' : '';
+  const opts = (categories || []).map((c) => `<option value="${esc(c)}" ${selectedCategory === c ? 'selected' : ''}>${esc(c)}</option>`).join('');
+  return `<option value=""${noneSelected}>Uncategorized</option>` + opts;
+}
+
+// Members Area > Files tab — read-only browsing/downloading for every
+// member. Only an admin can add, edit, or remove a file here (see
+// adminFilesHTML below), so unlike Gallery/Build Logs/Our Droids there's no
+// upload form on this tab at all, just the grouped, downloadable list.
+function filesTabHTML(files, categories) {
+  if (files.length === 0) {
+    return `<p class="sub">No files here yet — an admin can add logos, templates, and other downloads from Admin &gt; Files.</p>`;
+  }
+  const fileCard = (f) => `
+      <div class="card">
+        <div class="thumb">${esc((f.ext || '').toUpperCase())}</div>
+        <div class="body">
+          <h4>${esc(f.title)}</h4>
+          ${f.description ? `<p>${esc(f.description)}</p>` : ''}
+          <p style="font-size:12px; color:var(--muted); margin-top:6px;">${esc(formatFileSize(f.size))}</p>
+          <p style="margin-top:10px;"><a class="btn-small" href="/members/files/download/${esc(f.id)}">Download</a></p>
+        </div>
+      </div>`;
+
+  return groupFilesByCategory(files, categories).map(({ category, files: groupFiles }) => `
+    <section class="gallery-event-group">
+      <div class="gallery-event-heading"><h2>${category ? esc(category) : 'Uncategorized'}</h2></div>
+      <div class="card-grid">${groupFiles.map(fileCard).join('')}</div>
+    </section>`).join('');
+}
+
 function dashNav(active, currentUser) {
   return `
 <div class="dash-nav">
@@ -1407,6 +1623,7 @@ function dashNav(active, currentUser) {
     <a href="/members/dashboard?tab=logs" class="${active === 'logs' ? 'active' : ''}">Build Logs</a>
     <a href="/members/dashboard?tab=gallery" class="${active === 'gallery' ? 'active' : ''}">Gallery</a>
     <a href="/members/dashboard?tab=droids" class="${active === 'droids' ? 'active' : ''}">Our Droids</a>
+    <a href="/members/dashboard?tab=files" class="${active === 'files' ? 'active' : ''}">Files</a>
     ${currentUser.role === 'admin' ? `<a href="/members/admin" class="${active === 'admin' ? 'active' : ''}">Admin</a>` : ''}
     <a href="/members/change-password" class="${active === 'change-password' ? 'active' : ''}">My Account</a>
     <a class="view-public" href="/">View public site</a>
@@ -1415,11 +1632,12 @@ function dashNav(active, currentUser) {
 </div>`;
 }
 
-function dashboardHTML({ tab, openEventId, editId, events, rsvps, addedDroids, users, buildLogs, logError, logNotice, galleryItems, galleryError, galleryNotice, droidShowcase, droidsError, droidsNotice, eventsError, eventsNotice, currentUser, droidTypes }) {
+function dashboardHTML({ tab, openEventId, editId, events, rsvps, addedDroids, users, buildLogs, logError, logNotice, galleryItems, galleryError, galleryNotice, droidShowcase, droidsError, droidsNotice, eventsError, eventsNotice, currentUser, droidTypes, memberFiles, fileCategories }) {
   const content = tab === 'events' ? eventsTabHTML(events, rsvps, addedDroids, openEventId, eventsError, eventsNotice, droidTypes || [])
     : tab === 'directory' ? directoryTabHTML(users)
     : tab === 'gallery' ? galleryTabHTML(galleryItems, currentUser, galleryError, galleryNotice, editId, events)
     : tab === 'droids' ? droidsTabHTML(droidShowcase || [], currentUser, droidsError, droidsNotice, editId, droidTypes || [])
+    : tab === 'files' ? filesTabHTML(memberFiles || [], fileCategories || [])
     : logsTabHTML(buildLogs, currentUser, logError, logNotice, editId, droidTypes || []);
 
   return `<!doctype html>
@@ -1524,6 +1742,7 @@ function adminSubNav(active) {
     <a href="/members/admin/logs" class="${active === 'logs' ? 'active' : ''}">Build Logs</a>
     <a href="/members/admin/gallery" class="${active === 'gallery' ? 'active' : ''}">Gallery</a>
     <a href="/members/admin/droids" class="${active === 'droids' ? 'active' : ''}">Droids</a>
+    <a href="/members/admin/files" class="${active === 'files' ? 'active' : ''}">Files</a>
   </div>`;
 }
 
@@ -2006,6 +2225,120 @@ document.querySelectorAll('form[action="/members/admin/droids/delete"]').forEach
 </body></html>`;
 }
 
+// Admin > Files — the only place files get uploaded, edited, or removed
+// (members can only browse/download from their own Files tab — see
+// filesTabHTML above). Combines three things on one page: category
+// management (same add/remove-chip pattern as Admin > Droids' droid types),
+// an upload form (or an edit form in its place, when editingFile is set),
+// and a table of everything uploaded so far.
+function adminFilesHTML({ currentUser, files, categories, error, notice, editingFile }) {
+  const categoryChips = (categories || []).map((c) => `
+    <form method="post" action="/members/admin/files/categories/delete" onsubmit="return false;" data-category="${esc(c)}" style="display:inline-flex; align-items:center; gap:6px; background:var(--cream-panel); border:1px solid var(--border); border-radius:20px; padding:4px 6px 4px 12px; margin:0 8px 8px 0;">
+      <input type="hidden" name="category_name" value="${esc(c)}">
+      <span style="font-size:13px;">${esc(c)}</span>
+      <button type="submit" class="btn-small btn-danger" style="border-radius:50%; width:20px; height:20px; padding:0; line-height:1;" aria-label="Remove ${esc(c)}">&times;</button>
+    </form>`).join('');
+
+  const rows = files.map((f) => `
+    <tr>
+      <td>${esc(f.title)}</td>
+      <td>${f.category ? esc(f.category) : '<span style="color:var(--muted);">Uncategorized</span>'}</td>
+      <td>${esc((f.ext || '').toUpperCase())}</td>
+      <td>${esc(formatFileSize(f.size))}</td>
+      <td class="admin-actions">
+        <a class="btn-small" href="/members/admin/files?edit=${encodeURIComponent(f.id)}">Edit</a>
+        <form method="post" action="/members/admin/files/delete" onsubmit="return false;" data-file="${esc(f.title)}">
+          <input type="hidden" name="file_id" value="${esc(f.id)}">
+          <button type="submit" class="btn-small btn-danger">Delete</button>
+        </form>
+      </td>
+    </tr>`).join('');
+
+  const formTitle = editingFile ? 'Edit File' : 'Upload a File';
+  const formAction = editingFile ? '/members/admin/files/update' : '/members/admin/files/upload';
+  const submitLabel = editingFile ? 'Save Changes' : 'Upload';
+
+  return `<!doctype html>
+<html lang="en"><head>${HEAD}<title>Admin · Files — Norwich Droids</title></head>
+<body>
+${dashNav('admin', currentUser)}
+<div class="dash-main">
+  <h1>Admin</h1>
+  <p class="sub">Upload logos, templates, and other documents for every member to download from their own Files tab. Only admins can add, edit, or remove a file here.</p>
+  ${adminSubNav('files')}
+
+  ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
+  ${notice ? `<div class="admin-success">${esc(notice)}</div>` : ''}
+
+  <div class="login-card" style="max-width:640px; margin:0 0 40px;">
+    <h1 style="font-size:16px; text-align:left;">Manage Categories</h1>
+    <p class="sub" style="margin-top:0;">Group files on the members-area Files page. Removing a category doesn't delete its files — they just show under Uncategorized instead.</p>
+    <div style="margin-bottom:16px;">${categoryChips || '<p class="sub">No categories yet.</p>'}</div>
+    <form method="post" action="/members/admin/files/categories/add" style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
+      <div class="field" style="flex:1; min-width:220px; margin-bottom:0;">
+        <label for="new_category_name">Add a category</label>
+        <input type="text" id="new_category_name" name="category_name" maxlength="40" placeholder="e.g. Merchandise" required>
+      </div>
+      <button type="submit" class="btn btn-primary">Add</button>
+    </form>
+  </div>
+
+  <div class="login-card" style="max-width:520px; margin:0 0 40px;">
+    <h1 style="font-size:16px; text-align:left;">${formTitle}</h1>
+    <form method="post" action="${formAction}" enctype="multipart/form-data">
+      ${editingFile ? `<input type="hidden" name="file_id" value="${esc(editingFile.id)}">` : ''}
+      <div class="field">
+        <label for="file_title">Title</label>
+        <input type="text" id="file_title" name="title" maxlength="80" value="${editingFile ? esc(editingFile.title) : ''}" required>
+      </div>
+      <div class="field">
+        <label for="file_description">Description <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span></label>
+        <textarea id="file_description" name="description" rows="2" maxlength="300">${editingFile ? esc(editingFile.description || '') : ''}</textarea>
+      </div>
+      <div class="field">
+        <label for="file_category">Category</label>
+        <select id="file_category" name="category">
+          ${fileCategoryOptions(categories, editingFile ? (editingFile.category || '') : '')}
+        </select>
+      </div>
+      <div class="field">
+        <label for="file_upload">File ${editingFile ? '<span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — leave blank to keep the current file)</span>' : ''}</label>
+        <input type="file" id="file_upload" name="file" accept="${MEMBER_FILE_ACCEPT}" ${editingFile ? '' : 'required'}>
+      </div>
+      <button type="submit" class="btn btn-primary">${submitLabel}</button>
+      ${editingFile ? `<a href="/members/admin/files" class="btn-small" style="margin-left:10px;">Cancel</a>` : ''}
+    </form>
+    <p style="font-size:12px; color:var(--muted); margin:14px 0 0;">Images/logos (PNG, JPEG, WEBP, SVG), PDF, Word (.doc/.docx), or ZIP — up to ${Math.round(MAX_MEMBER_FILE_BYTES / (1024 * 1024))}MB. Stored and served exactly as uploaded — nothing is resized or re-encoded.</p>
+  </div>
+
+  <div class="admin-table-wrap">
+    <table class="admin-table">
+      <thead><tr><th>Title</th><th>Category</th><th>Type</th><th>Size</th><th>Actions</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="5">No files yet.</td></tr>`}</tbody>
+    </table>
+  </div>
+</div>
+<script>
+document.querySelectorAll('form[action="/members/admin/files/categories/delete"]').forEach((f) => {
+  f.addEventListener('submit', () => {
+    if (confirm('Remove "' + f.dataset.category + '" from the category list? Its files will show under Uncategorized instead.')) {
+      f.removeAttribute('onsubmit');
+      HTMLFormElement.prototype.submit.call(f);
+    }
+  });
+});
+document.querySelectorAll('form[action="/members/admin/files/delete"]').forEach((f) => {
+  f.addEventListener('submit', () => {
+    if (confirm('Delete "' + f.dataset.file + '"? This cannot be undone.')) {
+      f.removeAttribute('onsubmit');
+      HTMLFormElement.prototype.submit.call(f);
+    }
+  });
+});
+</script>
+</body></html>`;
+}
+
 function setupPageHTML(error) {
   return `<!doctype html>
 <html lang="en"><head>${HEAD}<title>First-time Setup — Norwich Droids</title></head>
@@ -2287,9 +2620,11 @@ export default {
       const buildLogs = tab === 'logs' ? await getBuildLogs(env) : [];
       const galleryItems = tab === 'gallery' ? await getGalleryIndex(env) : [];
       const droidShowcase = tab === 'droids' ? await getDroidShowcase(env) : [];
+      const memberFiles = tab === 'files' ? await getMemberFiles(env) : [];
+      const fileCategories = tab === 'files' ? await getFileCategories(env) : [];
       const droidTypes = await getDroidTypes(env);
       return htmlResponse(dashboardHTML({
-        tab, openEventId: url.searchParams.get('open') || '', editId: url.searchParams.get('edit') || '', events, rsvps, addedDroids, users, buildLogs, galleryItems, droidShowcase, droidTypes,
+        tab, openEventId: url.searchParams.get('open') || '', editId: url.searchParams.get('edit') || '', events, rsvps, addedDroids, users, buildLogs, galleryItems, droidShowcase, droidTypes, memberFiles, fileCategories,
         eventsError: '', eventsNotice: '', droidsError: '', droidsNotice: '', currentUser,
       }));
     }
@@ -2867,6 +3202,36 @@ export default {
       });
     }
 
+    // Members Area > Files download — session-gated, same as the photo
+    // routes above, but always forces a download (Content-Disposition:
+    // attachment) rather than letting the browser render it inline. That
+    // matters more here than for a photo: this route can serve a PDF or an
+    // SVG, either of which a browser would otherwise happily open/execute
+    // directly from this same origin. Forcing a download, plus nosniff,
+    // means even an uploaded file that turned out to be mislabeled is never
+    // rendered as a page here — it only ever downloads as inert bytes.
+    if (path.startsWith('/members/files/download/') && request.method === 'GET') {
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      const id = path.slice('/members/files/download/'.length);
+      const files = await getMemberFiles(env);
+      const meta = files.find((f) => f.id === id);
+      if (!meta) return htmlResponse('Not found.', 404);
+      const blob = await getMemberFileBlob(env, id);
+      if (!blob) return htmlResponse('Not found.', 404);
+      const bytes = base64ToBytes(blob.data);
+      return new Response(bytes, {
+        status: 200,
+        headers: {
+          'Content-Type': blob.contentType,
+          'Content-Disposition': contentDispositionHeader(safeFileName(meta.title, meta.ext)),
+          'Cache-Control': 'private, max-age=3600',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
+    }
+
     // --- Admin-only routes ------------------------------------------------
     if (path.startsWith('/members/admin')) {
       const currentUser = await getSessionUser(request, env);
@@ -3303,6 +3668,135 @@ export default {
         const remaining = droidTypes.filter((t) => t !== typeName);
         await saveDroidTypes(env, remaining);
         return htmlResponse(adminDroidsHTML({ currentUser, droidShowcase, error: '', notice: `"${typeName}" was removed from the droid type list.`, droidTypes: remaining }));
+      }
+
+      // --- Files management (admin-only upload/edit/delete) ---------------
+
+      if (path === '/members/admin/files' && request.method === 'GET') {
+        const files = await getMemberFiles(env);
+        const categories = await getFileCategories(env);
+        const editId = url.searchParams.get('edit');
+        const editingFile = editId ? files.find((f) => f.id === editId) || null : null;
+        return htmlResponse(adminFilesHTML({ currentUser, files, categories, error: '', notice: '', editingFile }));
+      }
+
+      if (path === '/members/admin/files/upload' && request.method === 'POST') {
+        const form = await request.formData();
+        const files = await getMemberFiles(env);
+        const categories = await getFileCategories(env);
+        const title = String(form.get('title') || '').trim().slice(0, 80);
+        const description = String(form.get('description') || '').trim().slice(0, 300);
+        const requestedCategory = String(form.get('category') || '').trim();
+        const category = categories.includes(requestedCategory) ? requestedCategory : '';
+        if (!title) {
+          return htmlResponse(adminFilesHTML({ currentUser, files, categories, error: 'Please give the file a title.', notice: '', editingFile: null }), 400);
+        }
+        const file = form.get('file');
+        if (!file || typeof file === 'string' || !file.size) {
+          return htmlResponse(adminFilesHTML({ currentUser, files, categories, error: 'Please choose a file to upload.', notice: '', editingFile: null }), 400);
+        }
+        if (file.size > MAX_MEMBER_FILE_BYTES) {
+          return htmlResponse(adminFilesHTML({ currentUser, files, categories, error: `That file is too large to upload — please use a file under ${Math.round(MAX_MEMBER_FILE_BYTES / (1024 * 1024))}MB.`, notice: '', editingFile: null }), 400);
+        }
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const validationError = memberFileValidationError(file.type, bytes);
+        if (validationError) {
+          return htmlResponse(adminFilesHTML({ currentUser, files, categories, error: validationError, notice: '', editingFile: null }), 400);
+        }
+        const spec = MEMBER_FILE_TYPES[file.type];
+        const id = crypto.randomUUID();
+        await saveMemberFileBlob(env, id, file.type, bytesToBase64(bytes));
+        const updatedFiles = await getMemberFiles(env);
+        updatedFiles.unshift({
+          id, title, description, category, ext: spec.ext, contentType: file.type, size: bytes.length,
+          uploadedAt: new Date().toISOString(), uploadedBy: currentUser.name,
+        });
+        await saveMemberFiles(env, updatedFiles);
+        return htmlResponse(adminFilesHTML({ currentUser, files: updatedFiles, categories, error: '', notice: `"${title}" was uploaded.`, editingFile: null }));
+      }
+
+      if (path === '/members/admin/files/update' && request.method === 'POST') {
+        const form = await request.formData();
+        const fileId = String(form.get('file_id') || '');
+        const files = await getMemberFiles(env);
+        const categories = await getFileCategories(env);
+        const item = files.find((f) => f.id === fileId);
+        if (!item) {
+          return htmlResponse(adminFilesHTML({ currentUser, files, categories, error: 'File not found.', notice: '', editingFile: null }), 400);
+        }
+        const title = String(form.get('title') || '').trim().slice(0, 80);
+        const description = String(form.get('description') || '').trim().slice(0, 300);
+        const requestedCategory = String(form.get('category') || '').trim();
+        const category = categories.includes(requestedCategory) ? requestedCategory : '';
+        if (!title) {
+          return htmlResponse(adminFilesHTML({ currentUser, files, categories, error: 'Please give the file a title.', notice: '', editingFile: item }), 400);
+        }
+        const file = form.get('file');
+        const hasFile = file && typeof file !== 'string' && file.size;
+        if (hasFile) {
+          if (file.size > MAX_MEMBER_FILE_BYTES) {
+            return htmlResponse(adminFilesHTML({ currentUser, files, categories, error: `That file is too large to upload — please use a file under ${Math.round(MAX_MEMBER_FILE_BYTES / (1024 * 1024))}MB.`, notice: '', editingFile: item }), 400);
+          }
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          const validationError = memberFileValidationError(file.type, bytes);
+          if (validationError) {
+            return htmlResponse(adminFilesHTML({ currentUser, files, categories, error: validationError, notice: '', editingFile: item }), 400);
+          }
+          const spec = MEMBER_FILE_TYPES[file.type];
+          await saveMemberFileBlob(env, fileId, file.type, bytesToBase64(bytes));
+          item.ext = spec.ext;
+          item.contentType = file.type;
+          item.size = bytes.length;
+        }
+        item.title = title;
+        item.description = description;
+        item.category = category;
+        await saveMemberFiles(env, files);
+        return htmlResponse(adminFilesHTML({ currentUser, files, categories, error: '', notice: 'File updated.', editingFile: null }));
+      }
+
+      if (path === '/members/admin/files/delete' && request.method === 'POST') {
+        const form = await request.formData();
+        const fileId = String(form.get('file_id') || '');
+        const files = await getMemberFiles(env);
+        const categories = await getFileCategories(env);
+        const target = files.find((f) => f.id === fileId);
+        if (!target) {
+          return htmlResponse(adminFilesHTML({ currentUser, files, categories, error: 'File not found.', notice: '', editingFile: null }), 400);
+        }
+        const remaining = files.filter((f) => f.id !== fileId);
+        await saveMemberFiles(env, remaining);
+        await deleteMemberFileBlob(env, fileId);
+        return htmlResponse(adminFilesHTML({ currentUser, files: remaining, categories, error: '', notice: `"${target.title}" was deleted.`, editingFile: null }));
+      }
+
+      if (path === '/members/admin/files/categories/add' && request.method === 'POST') {
+        const form = await request.formData();
+        const files = await getMemberFiles(env);
+        const categories = await getFileCategories(env);
+        const name = String(form.get('category_name') || '').trim().slice(0, 40);
+        if (!name) {
+          return htmlResponse(adminFilesHTML({ currentUser, files, categories, error: 'Enter a category name.', notice: '', editingFile: null }), 400);
+        }
+        if (categories.some((c) => c.toLowerCase() === name.toLowerCase())) {
+          return htmlResponse(adminFilesHTML({ currentUser, files, categories, error: `"${name}" is already in the list.`, notice: '', editingFile: null }), 400);
+        }
+        categories.push(name);
+        await saveFileCategories(env, categories);
+        return htmlResponse(adminFilesHTML({ currentUser, files, categories, error: '', notice: `"${name}" was added to the category list.`, editingFile: null }));
+      }
+
+      if (path === '/members/admin/files/categories/delete' && request.method === 'POST') {
+        const form = await request.formData();
+        const files = await getMemberFiles(env);
+        const categories = await getFileCategories(env);
+        const name = String(form.get('category_name') || '').trim();
+        if (!categories.includes(name)) {
+          return htmlResponse(adminFilesHTML({ currentUser, files, categories, error: 'Category not found.', notice: '', editingFile: null }), 400);
+        }
+        const remaining = categories.filter((c) => c !== name);
+        await saveFileCategories(env, remaining);
+        return htmlResponse(adminFilesHTML({ currentUser, files, categories: remaining, error: '', notice: `"${name}" was removed from the category list. Its files now show under Uncategorized.`, editingFile: null }));
       }
 
       return htmlResponse('Not found.', 404);
