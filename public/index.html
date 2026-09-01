@@ -92,6 +92,11 @@
 
 <script>
 (function () {
+  var BUILD_STATUS_LABELS = {
+    'planning': { label: 'Planning', className: 'status-planning' },
+    'in-progress': { label: 'In Progress', className: 'status-in-progress' },
+    'completed': { label: 'Completed', className: 'status-completed' },
+  };
   var grid = document.getElementById('droid-grid');
   var lightbox = document.getElementById('lightbox');
   var lightboxImg = document.getElementById('lightbox-img');
@@ -162,6 +167,14 @@
 
       var h4 = document.createElement('h4');
       h4.textContent = d.droidName || d.droidType || '';
+      var statusInfo = BUILD_STATUS_LABELS[d.buildStatus];
+      if (statusInfo) {
+        var statusBadge = document.createElement('span');
+        statusBadge.className = 'status-badge ' + statusInfo.className;
+        statusBadge.textContent = statusInfo.label;
+        statusBadge.style.marginLeft = '6px';
+        h4.appendChild(statusBadge);
+      }
       body.appendChild(h4);
 
       var p = document.createElement('p');
