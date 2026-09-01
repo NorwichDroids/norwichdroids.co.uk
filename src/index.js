@@ -1240,6 +1240,7 @@ function publicHead() {
     <a href="/about.html">About</a>
     <a href="/events.html">Events</a>
     <a href="/gallery.html">Gallery</a>
+    <a href="/charity.html">Charity</a>
     <a class="btn btn-primary" href="/members/login">Members Login</a>
   </div>
 </div>`;
@@ -1707,6 +1708,7 @@ function publicSiteNav() {
     <a href="/about.html">About</a>
     <a href="/events.html">Events</a>
     <a href="/gallery.html">Gallery</a>
+    <a href="/charity.html">Charity</a>
     <a class="btn btn-primary" href="/members/login">Members Login</a>
   </div>
 </div>`;
