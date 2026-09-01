@@ -1773,12 +1773,12 @@ function adminPageHTML({ currentUser, users, error, notice, generated, editingUs
     </tr>`).join('');
 
   return `<!doctype html>
-<html lang="en"><head>${HEAD}<title>Admin — Norwich Droids</title></head>
+<html lang="en"><head>${HEAD}${PHOTO_EDITOR_HEAD}<title>Admin — Norwich Droids</title></head>
 <body>
 ${dashNav('admin', currentUser)}
 <div class="dash-main">
   <h1>Admin</h1>
-  <p class="sub">Add members, reset passwords, and manage admin access.</p>
+  <p class="sub">Add members, edit their profiles, reset passwords, and manage admin access.</p>
   ${adminSubNav('members')}
 
   ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
@@ -1791,7 +1791,7 @@ ${dashNav('admin', currentUser)}
 
   <div class="login-card" style="max-width:520px; margin:0 0 40px;">
     <h1 style="font-size:16px; text-align:left;">${editingUser ? `Edit ${esc(editingUser.name)}` : 'Add a Member'}</h1>
-    <form method="post" action="${editingUser ? '/members/admin/update' : '/members/admin/add'}">
+    <form method="post" action="${editingUser ? '/members/admin/update' : '/members/admin/add'}" enctype="multipart/form-data">
       ${editingUser ? `<input type="hidden" name="user_id" value="${esc(editingUser.id)}">` : ''}
       <div class="field">
         <label for="new_name">Name</label>
@@ -1805,6 +1805,28 @@ ${dashNav('admin', currentUser)}
         <label for="new_droid">Droid (optional)</label>
         <input type="text" id="new_droid" name="droid" placeholder="e.g. R2 Unit" value="${esc(editingUser ? (editingUser.droid || '') : '')}">
       </div>
+      ${editingUser ? `
+      <div class="field">
+        <label for="edit_nickname">Nickname <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span></label>
+        <input type="text" id="edit_nickname" name="nickname" maxlength="40" placeholder="e.g. Chewy" value="${esc(editingUser.nickname || '')}">
+      </div>
+      <div class="field">
+        <label for="edit_bio">About <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — shown on the public About page)</span></label>
+        <textarea id="edit_bio" name="bio" rows="3" maxlength="500">${esc(editingUser.bio || '')}</textarea>
+      </div>
+      <div class="field">
+        <label for="edit_photo">Profile Photo</label>
+        <div class="photo-row" style="margin-bottom:10px;">
+          ${editingUser.hasPhoto
+            ? `<img class="avatar-img avatar-img-lg" src="/members/photo/${esc(editingUser.id)}?v=${esc(editingUser.photoUpdatedAt || 0)}" alt="${esc(editingUser.name)}">`
+            : `<div class="avatar avatar-lg">${esc(initials(editingUser.name))}</div>`}
+        </div>
+        <input type="file" id="edit_photo" name="photo" accept="image/jpeg,image/png,image/webp" data-photo-editor>
+        ${editingUser.hasPhoto ? `
+        <label style="font-weight:400; text-transform:none; letter-spacing:0; display:flex; align-items:center; gap:6px; margin-top:8px;">
+          <input type="checkbox" name="remove_photo" value="1" style="width:auto;"> Remove current photo
+        </label>` : ''}
+      </div>` : ''}
       <button type="submit" class="btn btn-primary">${editingUser ? 'Save Changes' : 'Add Member'}</button>
       ${editingUser ? `<a href="/members/admin" class="btn-small" style="margin-left:10px;">Cancel</a>` : ''}
     </form>
@@ -1817,6 +1839,7 @@ ${dashNav('admin', currentUser)}
     </table>
   </div>
 </div>
+${photoEditorMarkup()}
 <script>
 document.querySelectorAll('form[action="/members/admin/delete"]').forEach((f) => {
   f.addEventListener('submit', () => {
@@ -3256,6 +3279,11 @@ export default {
         const name = String(form.get('name') || '').trim();
         const email = String(form.get('email') || '').trim().toLowerCase();
         const droid = String(form.get('droid') || '').trim();
+        // Same fields and limits as the member's own My Account page
+        // (/members/account/nickname, /members/account/bio) — an admin is
+        // just editing the same profile from the other side.
+        const nickname = String(form.get('nickname') || '').trim().slice(0, 40);
+        const bio = String(form.get('bio') || '').trim().slice(0, 500);
         if (!name || !email) {
           return htmlResponse(adminPageHTML({ currentUser, users, error: 'Name and email are required.', notice: '', generated: null, editingUser: target }), 400);
         }
@@ -3266,9 +3294,43 @@ export default {
             return htmlResponse(adminPageHTML({ currentUser, users, error: 'Another member already uses that email.', notice: '', generated: null, editingUser: target }), 400);
           }
         }
+
+        // Photo: a new file replaces the current one; otherwise the "Remove
+        // current photo" checkbox (only shown when there is one) clears it;
+        // otherwise the existing photo is left exactly as it was — same
+        // three-way choice the member has on their own My Account page.
+        const photoFile = form.get('photo');
+        const hasPhotoFile = photoFile && typeof photoFile !== 'string' && photoFile.size;
+        if (hasPhotoFile) {
+          if (!ALLOWED_PHOTO_TYPES.includes(photoFile.type)) {
+            return htmlResponse(adminPageHTML({ currentUser, users, error: 'Photos must be JPEG, PNG, or WEBP.', notice: '', generated: null, editingUser: target }), 400);
+          }
+          if (photoFile.size > MAX_PHOTO_UPLOAD_BYTES) {
+            return htmlResponse(adminPageHTML({ currentUser, users, error: 'That photo is too large to upload — please use a file under 8MB.', notice: '', generated: null, editingUser: target }), 400);
+          }
+          const photoBytes = new Uint8Array(await photoFile.arrayBuffer());
+          const mismatch = imageMismatchMessage(photoBytes, photoFile.type);
+          if (mismatch) {
+            return htmlResponse(adminPageHTML({ currentUser, users, error: mismatch, notice: '', generated: null, editingUser: target }), 400);
+          }
+          const prepared = await prepareUploadedPhoto(photoBytes, photoFile.type);
+          if (prepared.errorMessage) {
+            return htmlResponse(adminPageHTML({ currentUser, users, error: prepared.errorMessage, notice: '', generated: null, editingUser: target }), 400);
+          }
+          await savePhoto(env, target.id, prepared.contentType, bytesToBase64(prepared.bytes));
+          target.hasPhoto = true;
+          target.photoUpdatedAt = Date.now();
+        } else if (form.get('remove_photo') === '1') {
+          await deletePhoto(env, target.id);
+          target.hasPhoto = false;
+          delete target.photoUpdatedAt;
+        }
+
         target.name = name;
         target.email = email;
         target.droid = droid;
+        target.nickname = nickname;
+        target.bio = bio;
         // Write the user record + new email mapping FIRST, then drop the old
         // mapping last — if anything fails partway, the account stays
         // reachable under one email or the other rather than neither.
