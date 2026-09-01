@@ -324,6 +324,22 @@ h1, h2, h3, .display {
 .diary-entry-text { font-size: 14.5px; line-height: 1.65; color: var(--text); white-space: pre-wrap; margin: 0; }
 .diary-entry-actions { margin-top: 10px; display: flex; gap: 8px; }
 
+/* Build status badge — shown on a droid's card wherever it appears (Our
+   Droids, a member's own Droids tab, their profile page, the build log
+   page itself) whenever the owner has set one. No badge at all when unset. */
+.status-badge {
+  display: inline-block; font-size: 10px; font-weight: 700;
+  letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 7px; border-radius: 3px;
+  vertical-align: middle; white-space: nowrap;
+}
+.status-badge.status-planning { background: var(--cream-panel); color: var(--text); border: 1px solid var(--border); }
+.status-badge.status-in-progress { background: var(--accent); color: var(--on-accent); }
+.status-badge.status-completed { background: var(--ink); color: var(--cream); }
+
+/* Owner-only build status form on a droid's build log page */
+.status-form { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 4px; }
+.status-form select { width: auto; padding: 7px 10px; }
+
 /* Gallery lightbox — click a photo to see it larger */
 .lightbox {
   position: fixed;
@@ -492,11 +508,31 @@ h1, h2, h3, .display {
 .event-card .event-date .day.small { font-size: 15px; }
 .event-card .event-info { flex: 1; min-width: 180px; }
 
+/* RSVP — explicit "I'm Going" / "Can't Make It" buttons plus a plain-
+   language status line, rather than one button that cycles through
+   states. The block sits on its own row under the date/title row so
+   there's room for the status text and both buttons even on mobile. */
+.rsvp-block {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 0 22px 18px; margin-top: -4px;
+}
+.rsvp-current { font-size: 13px; font-weight: 700; color: var(--muted); }
+.rsvp-block-going .rsvp-current { color: var(--accent-dark); }
+.rsvp-block-not-going .rsvp-current { color: #a33; }
+.rsvp-buttons { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
 .rsvp-btn {
   flex: 0 0 auto; padding: 9px 18px; border-radius: 3px; font-weight: 700; font-size: 13px;
   border: 1.5px solid var(--border); background: var(--card); color: var(--ink);
 }
-.rsvp-btn.going { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+.rsvp-btn.rsvp-going.active { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+.rsvp-btn.rsvp-not-going.active { border-color: #a33; background: #a33; color: #fff; }
+
+.rsvp-clear {
+  flex: 0 0 auto; background: none; border: none; padding: 0; font-size: 12px;
+  color: var(--muted); text-decoration: underline; cursor: pointer;
+}
+.rsvp-clear:hover { color: var(--accent); }
 
 .details-toggle {
   display: flex; align-items: center; gap: 8px; padding: 11px 22px;
