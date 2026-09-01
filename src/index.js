@@ -1595,21 +1595,21 @@ function filesTabHTML(files, categories) {
   if (files.length === 0) {
     return `<p class="sub">No files here yet — an admin can add logos, templates, and other downloads from Admin &gt; Files.</p>`;
   }
-  const fileCard = (f) => `
-      <div class="card">
-        <div class="thumb">${esc((f.ext || '').toUpperCase())}</div>
-        <div class="body">
-          <h4>${esc(f.title)}</h4>
-          ${f.description ? `<p>${esc(f.description)}</p>` : ''}
-          <p style="font-size:12px; color:var(--muted); margin-top:6px;">${esc(formatFileSize(f.size))}</p>
-          <p style="margin-top:10px;"><a class="btn-small" href="/members/files/download/${esc(f.id)}">Download</a></p>
-        </div>
-      </div>`;
+  // Plain link list, deliberately no thumbnail/preview — some of what lands
+  // here (a ZIP, a Word doc) has nothing sensible to preview anyway, and a
+  // logo or PDF doesn't need one to be useful: the title IS the download
+  // link, with the description and file size underneath it as plain text.
+  const fileRow = (f) => `
+      <li>
+        <a href="/members/files/download/${esc(f.id)}">${esc(f.title)}</a>
+        ${f.description ? `<div class="file-desc">${esc(f.description)}</div>` : ''}
+        <div class="file-meta">${esc(formatFileSize(f.size))}</div>
+      </li>`;
 
   return groupFilesByCategory(files, categories).map(({ category, files: groupFiles }) => `
     <section class="gallery-event-group">
       <div class="gallery-event-heading"><h2>${category ? esc(category) : 'Uncategorized'}</h2></div>
-      <div class="card-grid">${groupFiles.map(fileCard).join('')}</div>
+      <ul class="file-list">${groupFiles.map(fileRow).join('')}</ul>
     </section>`).join('');
 }
 
