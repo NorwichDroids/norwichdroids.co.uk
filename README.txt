@@ -106,6 +106,14 @@ itself — no dashboard steps needed:
     admin back to a regular member (you can't demote yourself if you're
     the only admin left — the site won't let the club get locked out),
     reset anyone's password if they lose it, or remove a member entirely.
+  - The "Edit" link on each member also lets an admin edit that member's
+    whole profile on their behalf — name, email, droid, nickname, "About"
+    description, and profile photo (upload a new one, or tick "Remove
+    current photo" to clear it) — the same fields the member could set
+    themselves from "My Account", useful for a member who's away or
+    unsure how to update it themselves. A new photo goes through the same
+    checks as any other upload on the site (JPEG/PNG/WEBP only, up to
+    8MB, auto-shrunk if oversized).
   - Changing or resetting a password immediately signs that person out
     everywhere else, so a lost or shared device can't stay logged in
     after a password change.
