@@ -245,6 +245,20 @@ itself — no dashboard steps needed:
     remove a photo that shouldn't be there; members can edit their own
     entries but can't remove anyone else's, and can't edit anyone else's
     either — only an admin can remove.
+  - A "Files" tab gives every member somewhere to download logos,
+    committee templates, and other documents — grouped into categories
+    (starts seeded with "Logos", "Templates", "Documents", editable from
+    "Admin -> Files"). Unlike Gallery/Build Logs/Our Droids, members can
+    only browse and download here — adding, editing, or removing a file is
+    admin-only, from "Admin -> Files". An upload accepts images/logos
+    (PNG, JPEG, WEBP, SVG), PDF, Word documents (.doc/.docx), or ZIP files,
+    up to 10MB, and — unlike a photo elsewhere on the site — is never
+    resized or re-encoded, so it downloads back out exactly as uploaded.
+    Removing a category doesn't delete its files; they just move to an
+    "Uncategorized" group on the Files tab instead. Every download is
+    forced (the browser saves it rather than trying to open it inline) and
+    still requires being logged in, same as everything else in the
+    Members Area.
   - Photo uploads and edits everywhere above (profile photo, Gallery,
     Build Logs, Our Droids) open a crop-and-rotate tool right in the
     browser before the file is submitted — drag/resize the crop box, use
