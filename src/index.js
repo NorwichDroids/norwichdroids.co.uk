@@ -296,6 +296,36 @@ function matchesDeclaredImageType(bytes, declaredType) {
   return false;
 }
 
+// HEIC/HEIF is the default photo format on newer iPhones (Settings > Camera
+// > Formats > "High Efficiency") — picking one of these straight from the
+// phone's photo library is the single most common reason a real, unedited
+// phone photo fails the JPEG/PNG/WEBP magic-byte check above, and the
+// generic "doesn't look like a valid image" message just tells someone
+// their own camera roll photo is broken. Detecting it specifically lets the
+// upload routes below give a message that actually explains what happened
+// and how to fix it, instead of a dead end.
+// HEIC/HEIF files use the same ISO base media (MP4-family) container as
+// .mov/.mp4 — an "ftyp" box at byte 4, followed by a 4-byte major brand.
+// These are the brand strings Apple's camera and Photos app actually write
+// for photos (as opposed to video, which uses different brands).
+const HEIC_BRANDS = ['heic', 'heix', 'heim', 'heis', 'hevc', 'hevx', 'hevm', 'hevs', 'mif1', 'msf1'];
+function looksLikeHeic(bytes) {
+  if (bytes.length < 12) return false;
+  const ascii = (start, len) => String.fromCharCode(...bytes.subarray(start, start + len)).toLowerCase();
+  return ascii(4, 4) === 'ftyp' && HEIC_BRANDS.includes(ascii(8, 4));
+}
+
+// Every upload route calls this right after matchesDeclaredImageType fails,
+// so the HEIC-friendly wording only has to live in one place. Returns null
+// when the bytes are fine (nothing to report).
+function imageMismatchMessage(bytes, declaredType) {
+  if (matchesDeclaredImageType(bytes, declaredType)) return null;
+  if (looksLikeHeic(bytes)) {
+    return 'That looks like a HEIC/HEIF photo — the default format on newer iPhones — which this site can\'t read. On the phone: Settings > Camera > Formats > "Most Compatible" switches new photos to JPEG, or when picking an existing photo to upload, choose "Options" at the top of the picker and turn on "Automatic"/"Convert to JPEG" if offered. Then try uploading again.';
+  }
+  return "That file doesn't look like a valid image.";
+}
+
 // Shrinks an oversized photo down to fit MAX_PHOTO_BYTES instead of just
 // rejecting it, using @cf-wasm/photon — a WASM image library built to run
 // inside Cloudflare Workers directly (no R2 bucket or Cloudflare Images
@@ -2333,8 +2363,9 @@ export default {
           return await renderWith('That photo is too large to upload — please use a file under 8MB.', '');
         }
         const bytes = new Uint8Array(await file.arrayBuffer());
-        if (!matchesDeclaredImageType(bytes, file.type)) {
-          return await renderWith("That file doesn't look like a valid image.", '');
+        const mismatch = imageMismatchMessage(bytes, file.type);
+        if (mismatch) {
+          return await renderWith(mismatch, '');
         }
         const prepared = await prepareUploadedPhoto(bytes, file.type);
         if (prepared.errorMessage) {
@@ -2410,8 +2441,9 @@ export default {
           return await renderWith('That photo is too large to upload — please use a file under 8MB.', '', logId);
         }
         const bytes = new Uint8Array(await file.arrayBuffer());
-        if (!matchesDeclaredImageType(bytes, file.type)) {
-          return await renderWith("That file doesn't look like a valid image.", '', logId);
+        const mismatch = imageMismatchMessage(bytes, file.type);
+        if (mismatch) {
+          return await renderWith(mismatch, '', logId);
         }
         const prepared = await prepareUploadedPhoto(bytes, file.type);
         if (prepared.errorMessage) {
@@ -2469,8 +2501,9 @@ export default {
           return await renderWith(`"${file.name}" is too large to upload — please use files under 8MB.`, '');
         }
         const bytes = new Uint8Array(await file.arrayBuffer());
-        if (!matchesDeclaredImageType(bytes, file.type)) {
-          return await renderWith(`"${file.name}" doesn't look like a valid image.`, '');
+        const mismatch = imageMismatchMessage(bytes, file.type);
+        if (mismatch) {
+          return await renderWith(`"${file.name}": ${mismatch}`, '');
         }
         const result = await prepareUploadedPhoto(bytes, file.type);
         if (result.errorMessage) {
@@ -2534,8 +2567,9 @@ export default {
           return await renderWith('That photo is too large to upload — please use a file under 8MB.', '', photoId);
         }
         const bytes = new Uint8Array(await file.arrayBuffer());
-        if (!matchesDeclaredImageType(bytes, file.type)) {
-          return await renderWith("That file doesn't look like a valid image.", '', photoId);
+        const mismatch = imageMismatchMessage(bytes, file.type);
+        if (mismatch) {
+          return await renderWith(mismatch, '', photoId);
         }
         const prepared = await prepareUploadedPhoto(bytes, file.type);
         if (prepared.errorMessage) {
@@ -2582,8 +2616,9 @@ export default {
         return await renderWith('That photo is too large to upload — please use a file under 8MB.', '');
       }
       const bytes = new Uint8Array(await file.arrayBuffer());
-      if (!matchesDeclaredImageType(bytes, file.type)) {
-        return await renderWith("That file doesn't look like a valid image.", '');
+      const mismatch = imageMismatchMessage(bytes, file.type);
+      if (mismatch) {
+        return await renderWith(mismatch, '');
       }
       const prepared = await prepareUploadedPhoto(bytes, file.type);
       if (prepared.errorMessage) {
@@ -2645,8 +2680,9 @@ export default {
           return await renderWith('That photo is too large to upload — please use a file under 8MB.', '', droidId);
         }
         const bytes = new Uint8Array(await file.arrayBuffer());
-        if (!matchesDeclaredImageType(bytes, file.type)) {
-          return await renderWith("That file doesn't look like a valid image.", '', droidId);
+        const mismatch = imageMismatchMessage(bytes, file.type);
+        if (mismatch) {
+          return await renderWith(mismatch, '', droidId);
         }
         const prepared = await prepareUploadedPhoto(bytes, file.type);
         if (prepared.errorMessage) {
@@ -2742,8 +2778,9 @@ export default {
         return htmlResponse(changePasswordHTML(currentUser, { photoError: 'That photo is too large to upload — please use a file under 8MB.' }), 400);
       }
       const bytes = new Uint8Array(await file.arrayBuffer());
-      if (!matchesDeclaredImageType(bytes, file.type)) {
-        return htmlResponse(changePasswordHTML(currentUser, { photoError: "That file doesn't look like a valid image." }), 400);
+      const mismatch = imageMismatchMessage(bytes, file.type);
+      if (mismatch) {
+        return htmlResponse(changePasswordHTML(currentUser, { photoError: mismatch }), 400);
       }
       const prepared = await prepareUploadedPhoto(bytes, file.type);
       if (prepared.errorMessage) {
@@ -3180,8 +3217,9 @@ export default {
             return htmlResponse(adminGalleryHTML({ currentUser, galleryItems, error: 'That photo is too large to upload — please use a file under 8MB.', notice: '', events, editingItem: item }), 400);
           }
           const bytes = new Uint8Array(await file.arrayBuffer());
-          if (!matchesDeclaredImageType(bytes, file.type)) {
-            return htmlResponse(adminGalleryHTML({ currentUser, galleryItems, error: "That file doesn't look like a valid image.", notice: '', events, editingItem: item }), 400);
+          const mismatch = imageMismatchMessage(bytes, file.type);
+          if (mismatch) {
+            return htmlResponse(adminGalleryHTML({ currentUser, galleryItems, error: mismatch, notice: '', events, editingItem: item }), 400);
           }
           const prepared = await prepareUploadedPhoto(bytes, file.type);
           if (prepared.errorMessage) {
