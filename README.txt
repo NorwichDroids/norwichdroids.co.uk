@@ -315,6 +315,24 @@ itself — no dashboard steps needed:
     its whole diary and any photos attached to it, so nothing is left
     behind. Anyone can read a droid's build log with no login at all —
     only posting, editing, and deleting need to be logged in.
+  - From that same build log page, only the droid's owner also gets a
+    "Build Status" control where they can flag it as Planning, In
+    Progress, or Completed (or pick "No status shown" to clear it again).
+    Whichever one is set shows as a small coloured badge on that droid's
+    card everywhere it appears — the public "Our Droids" homepage section,
+    the member's own "Our Droids" tab, their public profile page's "Their
+    Builds" section, the build log page itself, and the "Status" column in
+    Admin -> Droids. A droid with no status set (the default — including
+    every droid added before this feature existed) shows no badge at all,
+    so this is entirely opt-in.
+  - The RSVP buttons on the members Events tab were reworked to be
+    unambiguous: instead of one button whose label changed depending on
+    what you'd already picked, there are now two explicit buttons ("I'm
+    Going" and "Can't Make It"), plus a plain-language status line above
+    them ("You're going" / "You can't make it" / "You haven't responded
+    yet") so it's obvious at a glance where you stand on any event. A
+    "Clear response" link appears once you've picked one, in case you'd
+    rather go back to no response at all.
 
 
 4. POINT norwichdroids.co.uk AT THIS SITE
