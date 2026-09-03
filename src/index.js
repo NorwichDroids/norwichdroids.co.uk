@@ -1759,10 +1759,10 @@ function assetsTabHTML(assets, assetPhotos, currentUser, error, notice, editId) 
       const extraPhotos = photosForAsset.slice(1);
       return `
       <div class="card">
-        <div class="thumb">${photosForAsset.length ? `<img src="/members/asset-photo/${esc(photosForAsset[0].id)}" alt="${esc(a.name)}">` : 'PHOTO'}</div>
+        <div class="thumb">${photosForAsset.length ? `<img src="/members/asset-photo/${esc(photosForAsset[0].id)}" alt="${esc(a.name)}" class="asset-lightbox-trigger">` : 'PHOTO'}</div>
         ${extraPhotos.length ? `
         <div class="asset-photo-strip">
-          ${extraPhotos.map((p) => `<img src="/members/asset-photo/${esc(p.id)}" alt="${esc(a.name)}">`).join('')}
+          ${extraPhotos.map((p) => `<img src="/members/asset-photo/${esc(p.id)}" alt="${esc(a.name)}" class="asset-lightbox-trigger">`).join('')}
         </div>` : ''}
         <div class="body">
           <h4>${esc(a.name)} ${assetConditionBadge(a.condition)}</h4>
@@ -1787,8 +1787,8 @@ function assetsTabHTML(assets, assetPhotos, currentUser, error, notice, editId) 
   // in the description at the same time.
   const photoField = editingItem
     ? `<div class="field">
-      <label for="asset_photo">Add More Photos <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — up to ${MAX_ASSET_PHOTOS_PER_UPLOAD} at once)</span></label>
-      <input type="file" id="asset_photo" name="photos" accept="image/jpeg,image/png,image/webp" multiple>
+      <label for="asset_photo">Add More Photos <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — up to ${MAX_ASSET_PHOTOS_PER_UPLOAD} at once; pick one at a time to crop/rotate it first)</span></label>
+      <input type="file" id="asset_photo" name="photos" accept="image/jpeg,image/png,image/webp" data-photo-editor multiple>
     </div>`
     : `<div class="field">
       <label for="asset_photo">Photo(s) <span style="font-weight:400; text-transform:none; letter-spacing:0;">(so everyone can see what it is — up to ${MAX_ASSET_PHOTOS_PER_UPLOAD} at once)</span></label>
@@ -1802,7 +1802,7 @@ function assetsTabHTML(assets, assetPhotos, currentUser, error, notice, editId) 
           <div class="asset-photo-manage">
             ${editingPhotos.map((p) => `
               <div class="asset-photo-manage-item">
-                <img src="/members/asset-photo/${esc(p.id)}" alt="${esc(editingItem.name)}">
+                <img src="/members/asset-photo/${esc(p.id)}" alt="${esc(editingItem.name)}" class="asset-lightbox-trigger">
                 <form method="post" action="/members/assets/photos/delete" onsubmit="return false;" data-asset="${esc(editingItem.name)}">
                   <input type="hidden" name="asset_id" value="${esc(editingItem.id)}">
                   <input type="hidden" name="photo_id" value="${esc(p.id)}">
@@ -1855,6 +1855,10 @@ function assetsTabHTML(assets, assetPhotos, currentUser, error, notice, editId) 
         ${photoManager}
       </aside>
     </div>
+    <div class="lightbox" id="asset-lightbox" hidden>
+      <button type="button" class="lightbox-close" id="asset-lightbox-close" aria-label="Close">&times;</button>
+      <img id="asset-lightbox-img" src="" alt="">
+    </div>
     <script>
     document.querySelectorAll('form[action="/members/assets/photos/delete"]').forEach((f) => {
       f.addEventListener('submit', () => {
@@ -1865,6 +1869,35 @@ function assetsTabHTML(assets, assetPhotos, currentUser, error, notice, editId) 
         }
       });
     });
+    (function () {
+      // Click any asset photo — the main card thumb, the extra-photos
+      // strip, or a thumbnail in the edit-mode Photos manager — to see it
+      // larger. Same lightbox markup/behaviour as the public Gallery and
+      // droid build log pages, just scoped to this tab's own photos.
+      var lightbox = document.getElementById('asset-lightbox');
+      var lightboxImg = document.getElementById('asset-lightbox-img');
+      var lightboxClose = document.getElementById('asset-lightbox-close');
+      if (!lightbox || !lightboxImg || !lightboxClose) return;
+
+      function openLightbox(src, alt) {
+        lightboxImg.src = src;
+        lightboxImg.alt = alt || '';
+        lightbox.hidden = false;
+      }
+      function closeLightbox() {
+        lightbox.hidden = true;
+        lightboxImg.src = '';
+      }
+      lightbox.addEventListener('click', closeLightbox);
+      lightboxImg.addEventListener('click', function (e) { e.stopPropagation(); });
+      lightboxClose.addEventListener('click', closeLightbox);
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !lightbox.hidden) closeLightbox();
+      });
+      document.querySelectorAll('.asset-lightbox-trigger').forEach(function (img) {
+        img.addEventListener('click', function () { openLightbox(img.src, img.alt); });
+      });
+    })();
     </script>`;
 }
 
