@@ -343,8 +343,9 @@ h1, h2, h3, .display {
 .status-badge.status-missing { background: #a33; color: #fff; }
 
 /* Extra-photos strip under an asset's main thumbnail on its card in the
-   Assets tab list view — read-only, just a hint that more angles exist.
-   Managing (removing) a photo happens from the sidebar edit form instead. */
+   Assets tab list view — a hint that more angles exist; click one (like
+   the main thumb) to see it larger in the lightbox. Managing (removing) a
+   photo happens from the sidebar edit form instead. */
 .asset-photo-strip { display: flex; gap: 6px; padding: 8px 16px 0; flex-wrap: wrap; }
 .asset-photo-strip img {
   width: 44px; height: 44px; border-radius: 4px; object-fit: cover;
@@ -364,6 +365,10 @@ h1, h2, h3, .display {
 }
 .asset-photo-manage-item form { margin-left: auto; }
 .asset-photo-manage-item button[disabled] { opacity: 0.5; cursor: not-allowed; }
+
+/* Any asset photo a member can click to see larger in the lightbox — the
+   card's main thumb, the extra-photos strip, and the edit-mode manager. */
+.asset-lightbox-trigger { cursor: pointer; }
 
 /* Owner-only build status form on a droid's build log page */
 .status-form { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 4px; }
