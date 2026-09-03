@@ -1795,8 +1795,13 @@ function assetsTabHTML(assets, assetPhotos, currentUser, error, notice, editId) 
       <input type="file" id="asset_photo" name="photos" accept="image/jpeg,image/png,image/webp" data-photo-editor multiple required>
     </div>`;
 
+  // Static, not sticky — .split-sidebar .login-card is sticky by default
+  // (see style.css) so the main save form stays in view while scrolling a
+  // long asset list, but with TWO .login-card boxes stacked in the same
+  // sidebar that rule would make this one sticky too, at the same offset,
+  // where it ends up covering the form (and its Save button) above it.
   const photoManager = editingItem ? `
-        <div class="login-card" style="max-width:none; margin:20px 0 0;">
+        <div class="login-card" style="max-width:none; margin:20px 0 0; position:static;">
           <h1 style="font-size:16px; text-align:left;">Photos</h1>
           ${editingPhotos.length ? `
           <div class="asset-photo-manage">
