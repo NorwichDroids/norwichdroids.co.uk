@@ -336,6 +336,12 @@ h1, h2, h3, .display {
 .status-badge.status-in-progress { background: var(--accent); color: var(--on-accent); }
 .status-badge.status-completed { background: var(--ink); color: var(--cream); }
 
+/* Asset condition badge — same .status-badge base, shown on an asset's
+   card in the Assets tab and in Admin > Assets whenever it's set. */
+.status-badge.status-good { background: var(--accent); color: var(--on-accent); }
+.status-badge.status-needs-repair { background: #f5e6c8; color: #8a5a00; border: 1px solid #e8cf95; }
+.status-badge.status-missing { background: #a33; color: #fff; }
+
 /* Owner-only build status form on a droid's build log page */
 .status-form { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 4px; }
 .status-form select { width: auto; padding: 7px 10px; }
