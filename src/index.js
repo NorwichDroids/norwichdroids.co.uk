@@ -176,6 +176,9 @@ const ALLOWED_PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 // multiplying that cost too far past what a single-photo upload already
 // costs.
 const MAX_GALLERY_PHOTOS_PER_UPLOAD = 4;
+// Same cap, same reasoning, for an admin's event-photos upload (see
+// eventPhotoIndex below).
+const MAX_EVENT_PHOTOS_PER_UPLOAD = 4;
 
 // --- Members Area > Files (admin uploads, any member can download) -------
 // Stored the same base64-in-KV way as photos above, but unlike a photo,
@@ -724,6 +727,43 @@ async function getPendingEvents(env) {
 
 async function savePendingEvents(env, pendingEvents) {
   await env.DATA.put('pendingEvents', JSON.stringify(pendingEvents));
+}
+
+// --- Event photos (admin-added, members-only viewing) --------------------
+// Reference photos attached to one specific event — venue floor plans,
+// parking maps, and the like — so members know what to expect before they
+// go. Same index-plus-blob split as gallery/droid photos above, but
+// deliberately admin-only to add or remove (matching every other detail on
+// an event, which only an admin can edit) and never exposed on the public
+// site — these are only ever shown inside the Events tab here in the
+// Members Area, unlike public gallery photos.
+async function getEventPhotoIndex(env) {
+  const raw = await env.DATA.get('eventPhotoIndex');
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveEventPhotoIndex(env, items) {
+  await env.DATA.put('eventPhotoIndex', JSON.stringify(items));
+}
+
+async function saveEventPhotoBlob(env, id, contentType, base64Data) {
+  await env.DATA.put(`eventphoto:${id}`, JSON.stringify({ contentType, data: base64Data }));
+}
+
+async function getEventPhotoBlob(env, id) {
+  const raw = await env.DATA.get(`eventphoto:${id}`);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+async function deleteEventPhotoBlob(env, id) {
+  await env.DATA.delete(`eventphoto:${id}`);
 }
 
 const MONTH_ABBREVIATIONS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
@@ -1288,7 +1328,8 @@ ${publicFoot()}
 </body></html>`;
 }
 
-function eventsTabHTML(events, rsvps, addedDroids, openEventId, error, notice, droidTypes) {
+function eventsTabHTML(events, rsvps, addedDroids, openEventId, error, notice, droidTypes, eventPhotos) {
+  const photosByEventId = eventPhotos || [];
   const list = events.length === 0
     ? `<p class="sub">No events on the calendar right now — an admin can add one, or suggest one yourself with the form on the right.</p>`
     : events.map((ev) => {
@@ -1296,6 +1337,7 @@ function eventsTabHTML(events, rsvps, addedDroids, openEventId, error, notice, d
     const statusLabel = status === 'going' ? "You're going" : (status === 'not-going' ? "You can't make it" : "You haven't responded yet");
     const droidsForEvent = [...ev.baseDroids, ...(Array.isArray(addedDroids[ev.id]) ? addedDroids[ev.id] : [])];
     const isOpen = openEventId === ev.id;
+    const photosForEvent = photosByEventId.filter((p) => p.eventId === ev.id);
 
     return `
       <div class="event-card">
@@ -1356,6 +1398,16 @@ function eventsTabHTML(events, rsvps, addedDroids, openEventId, error, notice, d
             <div class="event-description">
               <div class="droid-list-label">Description &amp; Other Info</div>
               <p>${esc(ev.description)}</p>
+            </div>` : ''}
+
+            ${photosForEvent.length ? `
+            <div class="droid-list-label">Event Photos</div>
+            <div class="gallery-grid" style="margin:0 0 22px;">
+              ${photosForEvent.map((ph) => `
+                <div class="card">
+                  <a class="thumb" href="/members/event-photo/${esc(ph.id)}" target="_blank" rel="noopener noreferrer"><img src="/members/event-photo/${esc(ph.id)}" alt="${esc(ph.caption || ev.title)}"></a>
+                  ${ph.caption ? `<div class="caption">${esc(ph.caption)}</div>` : ''}
+                </div>`).join('')}
             </div>` : ''}
 
             <div class="droid-list-label">Droids Attending</div>
@@ -1996,8 +2048,8 @@ function dashNav(active, currentUser) {
 </div>`;
 }
 
-function dashboardHTML({ tab, openEventId, editId, events, rsvps, addedDroids, users, buildLogs, logError, logNotice, galleryItems, galleryError, galleryNotice, droidShowcase, droidsError, droidsNotice, eventsError, eventsNotice, currentUser, droidTypes, memberFiles, fileCategories }) {
-  const content = tab === 'events' ? eventsTabHTML(events, rsvps, addedDroids, openEventId, eventsError, eventsNotice, droidTypes || [])
+function dashboardHTML({ tab, openEventId, editId, events, rsvps, addedDroids, users, buildLogs, logError, logNotice, galleryItems, galleryError, galleryNotice, droidShowcase, droidsError, droidsNotice, eventsError, eventsNotice, currentUser, droidTypes, memberFiles, fileCategories, eventPhotos = [] }) {
+  const content = tab === 'events' ? eventsTabHTML(events, rsvps, addedDroids, openEventId, eventsError, eventsNotice, droidTypes || [], eventPhotos)
     : tab === 'directory' ? directoryTabHTML(users)
     : tab === 'gallery' ? galleryTabHTML(galleryItems, currentUser, galleryError, galleryNotice, editId, events)
     : tab === 'droids' ? droidsTabHTML(droidShowcase || [], currentUser, droidsError, droidsNotice, editId, droidTypes || [])
@@ -2315,7 +2367,7 @@ function eventFormFields(ev) {
       </div>`;
 }
 
-function adminEventsHTML({ currentUser, events, pendingEvents, error, notice, editingEvent }) {
+function adminEventsHTML({ currentUser, events, pendingEvents, error, notice, editingEvent, eventPhotos = [] }) {
   const rows = events.map((ev) => `
     <tr>
       <td>${esc(ev.title)}${ev.isPrivate ? ' <span class="badge-private">Private</span>' : ''}</td>
@@ -2379,6 +2431,37 @@ ${dashNav('admin', currentUser)}
     </form>
   </div>
 
+  ${editingEvent ? `
+  <div class="login-card" style="max-width:680px; margin:0 0 40px;">
+    <h1 style="font-size:16px; text-align:left;">Photos for &ldquo;${esc(editingEvent.title)}&rdquo;</h1>
+    <p class="sub" style="margin:0 0 20px;">Reference photos for members &mdash; floor plans, parking maps, venue shots. Shown to members on this event's details in the Members Area; never on the public site.</p>
+    ${eventPhotos.length ? `
+    <div class="gallery-grid" style="margin-bottom:24px;">
+      ${eventPhotos.map((ph) => `
+        <div class="card">
+          <div class="thumb"><img src="/members/event-photo/${esc(ph.id)}" alt="${esc(ph.caption || editingEvent.title)}"></div>
+          ${ph.caption ? `<div class="caption">${esc(ph.caption)}</div>` : ''}
+          <form method="post" action="/members/admin/events/photos/delete" onsubmit="return false;" data-photo="${esc(ph.caption || 'this photo')}" style="padding:0 16px 16px;">
+            <input type="hidden" name="photo_id" value="${esc(ph.id)}">
+            <input type="hidden" name="event_id" value="${esc(editingEvent.id)}">
+            <button type="submit" class="btn-small btn-danger">Delete</button>
+          </form>
+        </div>`).join('')}
+    </div>` : `<p class="sub">No photos added yet.</p>`}
+    <form method="post" action="/members/admin/events/photos/upload" enctype="multipart/form-data">
+      <input type="hidden" name="event_id" value="${esc(editingEvent.id)}">
+      <div class="field">
+        <label for="ev_photo_files">Photo(s) <span style="font-weight:400; text-transform:none; letter-spacing:0;">(JPEG, PNG or WEBP, up to 1.5MB each, up to ${MAX_EVENT_PHOTOS_PER_UPLOAD} at once)</span></label>
+        <input type="file" id="ev_photo_files" name="photos" accept="image/jpeg,image/png,image/webp" multiple required>
+      </div>
+      <div class="field">
+        <label for="ev_photo_caption">Caption <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — applied to every photo in this upload)</span></label>
+        <input type="text" id="ev_photo_caption" name="caption" maxlength="140" placeholder="e.g. Hall floor plan">
+      </div>
+      <button type="submit" class="btn btn-primary">Upload</button>
+    </form>
+  </div>` : ''}
+
   <div class="admin-table-wrap">
     <table class="admin-table">
       <thead><tr><th>Title</th><th>Date</th><th>Location</th><th>Actions</th></tr></thead>
@@ -2389,7 +2472,7 @@ ${dashNav('admin', currentUser)}
 <script>
 document.querySelectorAll('form[action="/members/admin/events/delete"]').forEach((f) => {
   f.addEventListener('submit', () => {
-    if (confirm('Delete \\u201c' + f.dataset.event + '\\u201d? This also clears its RSVPs and added droids. This cannot be undone.')) {
+    if (confirm('Delete \\u201c' + f.dataset.event + '\\u201d? This also clears its RSVPs, added droids, and any event photos. This cannot be undone.')) {
       f.removeAttribute('onsubmit');
       HTMLFormElement.prototype.submit.call(f);
     }
@@ -2398,6 +2481,14 @@ document.querySelectorAll('form[action="/members/admin/events/delete"]').forEach
 document.querySelectorAll('form[action="/members/admin/events/reject"]').forEach((f) => {
   f.addEventListener('submit', () => {
     if (confirm('Reject the submission \\u201c' + f.dataset.event + '\\u201d? This cannot be undone.')) {
+      f.removeAttribute('onsubmit');
+      HTMLFormElement.prototype.submit.call(f);
+    }
+  });
+});
+document.querySelectorAll('form[action="/members/admin/events/photos/delete"]').forEach((f) => {
+  f.addEventListener('submit', () => {
+    if (confirm('Delete ' + f.dataset.photo + '? This cannot be undone.')) {
       f.removeAttribute('onsubmit');
       HTMLFormElement.prototype.submit.call(f);
     }
@@ -3082,9 +3173,10 @@ export default {
       const droidShowcase = tab === 'droids' ? await getDroidShowcase(env) : [];
       const memberFiles = tab === 'files' ? await getMemberFiles(env) : [];
       const fileCategories = tab === 'files' ? await getFileCategories(env) : [];
+      const eventPhotos = tab === 'events' ? await getEventPhotoIndex(env) : [];
       const droidTypes = await getDroidTypes(env);
       return htmlResponse(dashboardHTML({
-        tab, openEventId: url.searchParams.get('open') || '', editId: url.searchParams.get('edit') || '', events, rsvps, addedDroids, users, buildLogs, galleryItems, droidShowcase, droidTypes, memberFiles, fileCategories,
+        tab, openEventId: url.searchParams.get('open') || '', editId: url.searchParams.get('edit') || '', events, rsvps, addedDroids, users, buildLogs, galleryItems, droidShowcase, droidTypes, memberFiles, fileCategories, eventPhotos,
         eventsError: '', eventsNotice: '', droidsError: '', droidsNotice: '', currentUser,
       }));
     }
@@ -3706,7 +3798,7 @@ export default {
         const addedDroids = await readJSON(env, 'droids');
         return htmlResponse(dashboardHTML({
           tab: 'events', openEventId: '', events, rsvps, addedDroids, users: [], buildLogs: [],
-          galleryItems: [], eventsError, eventsNotice, currentUser, droidTypes: await getDroidTypes(env),
+          galleryItems: [], eventPhotos: await getEventPhotoIndex(env), eventsError, eventsNotice, currentUser, droidTypes: await getDroidTypes(env),
         }));
       };
 
@@ -3864,6 +3956,28 @@ export default {
 
       const logId = path.slice('/members/buildlog-photo/'.length);
       const photo = await getBuildLogPhoto(env, logId);
+      if (!photo) return htmlResponse('Not found.', 404);
+      const bytes = base64ToBytes(photo.data);
+      return new Response(bytes, {
+        status: 200,
+        headers: {
+          'Content-Type': photo.contentType,
+          'Cache-Control': 'private, max-age=86400',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
+    }
+
+    if (path.startsWith('/members/event-photo/') && request.method === 'GET') {
+      // Same reasoning as build log photos above — event photos (floor
+      // plans, parking maps, etc.) are only ever shown inside the
+      // members-only Events tab, so this is session-gated too, not a
+      // public URL.
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      const photoId = path.slice('/members/event-photo/'.length);
+      const photo = await getEventPhotoBlob(env, photoId);
       if (!photo) return htmlResponse('Not found.', 404);
       const bytes = base64ToBytes(photo.data);
       return new Response(bytes, {
@@ -4088,7 +4202,8 @@ export default {
         const pendingEvents = await getPendingEvents(env);
         const editId = url.searchParams.get('edit');
         const editingEvent = editId ? events.find((e) => e.id === editId) || null : null;
-        return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents, error: '', notice: '', editingEvent }));
+        const eventPhotos = editingEvent ? (await getEventPhotoIndex(env)).filter((p) => p.eventId === editingEvent.id) : [];
+        return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents, error: '', notice: '', editingEvent, eventPhotos }));
       }
 
       if (path === '/members/admin/events/add' && request.method === 'POST') {
@@ -4171,6 +4286,13 @@ export default {
         if (eventId in rsvps) { delete rsvps[eventId]; await writeJSON(env, 'rsvps', rsvps); }
         const droids = await readJSON(env, 'droids');
         if (eventId in droids) { delete droids[eventId]; await writeJSON(env, 'droids', droids); }
+        // ...and any event photos (floor plans, etc.) attached to it.
+        const allEventPhotos = await getEventPhotoIndex(env);
+        const photosToDelete = allEventPhotos.filter((p) => p.eventId === eventId);
+        if (photosToDelete.length) {
+          await saveEventPhotoIndex(env, allEventPhotos.filter((p) => p.eventId !== eventId));
+          await Promise.all(photosToDelete.map((p) => deleteEventPhotoBlob(env, p.id)));
+        }
         return htmlResponse(adminEventsHTML({ currentUser, events: remaining, pendingEvents, error: '', notice: `"${target.title}" was deleted.`, editingEvent: null }));
       }
 
@@ -4210,6 +4332,93 @@ export default {
         const remainingPending = pendingEvents.filter((p) => p.pendingId !== pendingId);
         await savePendingEvents(env, remainingPending);
         return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents: remainingPending, error: '', notice: `"${target.title}" was rejected and removed from the submission queue.`, editingEvent: null }));
+      }
+
+      // --- Event photo management -------------------------------------------
+      // Floor plans, parking maps, and other reference photos an admin
+      // attaches to one specific event — same multi-select-up-to-4 upload
+      // pattern as the members' Gallery tab, but admin-only (matching every
+      // other detail an event carries) and only ever shown to members here,
+      // never on the public site.
+
+      if (path === '/members/admin/events/photos/upload' && request.method === 'POST') {
+        const form = await request.formData();
+        const eventId = String(form.get('event_id') || '');
+        const events = await getEvents(env);
+        const pendingEvents = await getPendingEvents(env);
+        const targetEvent = events.find((e) => e.id === eventId);
+
+        const renderWith = async (error, notice) => {
+          const eventPhotos = targetEvent ? (await getEventPhotoIndex(env)).filter((p) => p.eventId === eventId) : [];
+          return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents, error, notice, editingEvent: targetEvent || null, eventPhotos }), targetEvent ? 200 : 400);
+        };
+
+        if (!targetEvent) {
+          return await renderWith('Event not found.', '');
+        }
+
+        const files = form.getAll('photos').filter((f) => f && typeof f !== 'string' && f.size);
+        const caption = String(form.get('caption') || '').trim().slice(0, 140);
+
+        if (files.length === 0) {
+          return await renderWith('Please choose at least one photo to upload.', '');
+        }
+        if (files.length > MAX_EVENT_PHOTOS_PER_UPLOAD) {
+          return await renderWith(`Please upload up to ${MAX_EVENT_PHOTOS_PER_UPLOAD} photos at a time.`, '');
+        }
+
+        // Validate EVERY file before saving ANY of them — same reasoning as
+        // the Gallery multi-upload above: one bad file in the batch rejects
+        // the whole thing rather than leaving a half-uploaded mess.
+        const prepared = [];
+        for (const file of files) {
+          if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
+            return await renderWith(`"${file.name}" isn't a JPEG, PNG, or WEBP photo.`, '');
+          }
+          if (file.size > MAX_PHOTO_UPLOAD_BYTES) {
+            return await renderWith(`"${file.name}" is too large to upload — please use files under 8MB.`, '');
+          }
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          const mismatch = imageMismatchMessage(bytes, file.type);
+          if (mismatch) {
+            return await renderWith(`"${file.name}": ${mismatch}`, '');
+          }
+          const result = await prepareUploadedPhoto(bytes, file.type);
+          if (result.errorMessage) {
+            return await renderWith(`"${file.name}": ${result.errorMessage}`, '');
+          }
+          prepared.push(result);
+        }
+
+        const allEventPhotos = await getEventPhotoIndex(env);
+        for (const p of prepared) {
+          const id = crypto.randomUUID();
+          await saveEventPhotoBlob(env, id, p.contentType, bytesToBase64(p.bytes));
+          allEventPhotos.unshift({ id, eventId, caption, createdAt: new Date().toISOString() });
+        }
+        await saveEventPhotoIndex(env, allEventPhotos);
+        return await renderWith('', prepared.length === 1 ? 'Photo uploaded.' : `${prepared.length} photos uploaded.`);
+      }
+
+      if (path === '/members/admin/events/photos/delete' && request.method === 'POST') {
+        const form = await request.formData();
+        const eventId = String(form.get('event_id') || '');
+        const photoId = String(form.get('photo_id') || '');
+        const events = await getEvents(env);
+        const pendingEvents = await getPendingEvents(env);
+        const targetEvent = events.find((e) => e.id === eventId);
+
+        const allEventPhotos = await getEventPhotoIndex(env);
+        const target = allEventPhotos.find((p) => p.id === photoId);
+        if (!target) {
+          const eventPhotos = targetEvent ? allEventPhotos.filter((p) => p.eventId === eventId) : [];
+          return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents, error: 'Photo not found.', notice: '', editingEvent: targetEvent || null, eventPhotos }), 400);
+        }
+        const remaining = allEventPhotos.filter((p) => p.id !== photoId);
+        await saveEventPhotoIndex(env, remaining);
+        await deleteEventPhotoBlob(env, photoId);
+        const eventPhotos = targetEvent ? remaining.filter((p) => p.eventId === eventId) : [];
+        return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents, error: '', notice: 'Photo deleted.', editingEvent: targetEvent || null, eventPhotos }));
       }
 
       // --- Build log management ---------------------------------------------
