@@ -1025,6 +1025,26 @@ async function saveBuildLogs(env, logs) {
   await env.DATA.put('buildlogs', JSON.stringify(logs));
 }
 
+// Posts made before ownerId existed on a build log entry have none, so
+// logsTabHTML never shows them an Edit link — there was no safe way to
+// tell who actually wrote one. But a post whose author name matches the
+// CURRENT viewer's own name is safe to claim: it backfills ownerId the
+// first time that member looks at the Build Logs tab, so their own old
+// posts get an Edit link without an admin having to fix each one by hand
+// from Admin > Build Logs. Never touches a post that already has an
+// owner, and never guesses across different members.
+async function claimLegacyBuildLogs(env, buildLogs, currentUser) {
+  let changed = false;
+  for (const log of buildLogs) {
+    if (!log.ownerId && log.author === currentUser.name) {
+      log.ownerId = currentUser.id;
+      changed = true;
+    }
+  }
+  if (changed) await saveBuildLogs(env, buildLogs);
+  return buildLogs;
+}
+
 // A build log post's optional photo lives under its own key, same
 // index-plus-blob split as gallery photos — but these stay members-only
 // (served through a session-gated route below), same as profile photos.
@@ -3488,7 +3508,7 @@ export default {
       const rsvps = await readJSON(env, 'rsvps');
       const addedDroids = await readJSON(env, 'droids');
       const users = tab === 'directory' ? await listUsers(env) : [];
-      const buildLogs = tab === 'logs' ? await getBuildLogs(env) : [];
+      const buildLogs = tab === 'logs' ? await claimLegacyBuildLogs(env, await getBuildLogs(env), currentUser) : [];
       const galleryItems = tab === 'gallery' ? await getGalleryIndex(env) : [];
       const droidShowcase = tab === 'droids' ? await getDroidShowcase(env) : [];
       const assets = tab === 'assets' ? await getAssets(env) : [];
@@ -3552,7 +3572,7 @@ export default {
       if (!currentUser) return redirect('/members/login');
 
       const renderWith = async (logError, logNotice) => {
-        const buildLogs = await getBuildLogs(env);
+        const buildLogs = await claimLegacyBuildLogs(env, await getBuildLogs(env), currentUser);
         return htmlResponse(dashboardHTML({
           tab: 'logs', openEventId: '', events: [], rsvps: {}, addedDroids: {}, users: [],
           buildLogs, logError, logNotice, galleryItems: [], currentUser, droidTypes: await getDroidTypes(env),
@@ -3623,7 +3643,7 @@ export default {
       if (!currentUser) return redirect('/members/login');
 
       const renderWith = async (logError, logNotice, editId) => {
-        const buildLogs = await getBuildLogs(env);
+        const buildLogs = await claimLegacyBuildLogs(env, await getBuildLogs(env), currentUser);
         return htmlResponse(dashboardHTML({
           tab: 'logs', openEventId: '', editId: editId || '', events: [], rsvps: {}, addedDroids: {}, users: [],
           buildLogs, logError, logNotice, galleryItems: [], currentUser, droidTypes: await getDroidTypes(env),
@@ -3636,7 +3656,7 @@ export default {
       const otherDroid = String(form.get('other_droid') || '').trim();
       const caption = String(form.get('caption') || '').trim();
 
-      const buildLogs = await getBuildLogs(env);
+      const buildLogs = await claimLegacyBuildLogs(env, await getBuildLogs(env), currentUser);
       const log = buildLogs.find((p) => p.id === logId);
       // Ownership is checked server-side, not just hidden in the UI — a
       // member can't edit another member's post by forging the log_id.
