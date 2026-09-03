@@ -342,6 +342,29 @@ h1, h2, h3, .display {
 .status-badge.status-needs-repair { background: #f5e6c8; color: #8a5a00; border: 1px solid #e8cf95; }
 .status-badge.status-missing { background: #a33; color: #fff; }
 
+/* Extra-photos strip under an asset's main thumbnail on its card in the
+   Assets tab list view — read-only, just a hint that more angles exist.
+   Managing (removing) a photo happens from the sidebar edit form instead. */
+.asset-photo-strip { display: flex; gap: 6px; padding: 8px 16px 0; flex-wrap: wrap; }
+.asset-photo-strip img {
+  width: 44px; height: 44px; border-radius: 4px; object-fit: cover;
+  border: 1px solid var(--border);
+}
+
+/* Photo management list in the Assets tab sidebar, shown only while
+   editing an existing asset — small thumbnails, each with its own Remove
+   button. Fits comfortably in the 320px .split-sidebar. */
+.asset-photo-manage { display: flex; flex-direction: column; gap: 8px; }
+.asset-photo-manage-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px; border: 1px solid var(--border); border-radius: 6px;
+}
+.asset-photo-manage-item img {
+  width: 48px; height: 48px; border-radius: 4px; object-fit: cover; flex-shrink: 0;
+}
+.asset-photo-manage-item form { margin-left: auto; }
+.asset-photo-manage-item button[disabled] { opacity: 0.5; cursor: not-allowed; }
+
 /* Owner-only build status form on a droid's build log page */
 .status-form { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 4px; }
 .status-form select { width: auto; padding: 7px 10px; }
