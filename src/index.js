@@ -1574,24 +1574,43 @@ function directoryTabHTML(users) {
       </div>`).join('')}</div>`;
 }
 
-function logsTabHTML(buildLogs, currentUser, error, notice, editId, droidTypes) {
+function logsTabHTML(buildLogs, currentUser, error, notice, editId, droidTypes, droidShowcase) {
   // Members can edit only their OWN posts (ownerId, not the display-name
   // author field — an admin can rename a member later). Legacy posts from
   // before ownerId existed have none, so they simply have no Edit link;
-  // an admin can still fix those up from Admin > Build Logs.
+  // an admin can still fix those up from Admin > Build Logs. Editing a
+  // post always happens right here on this tab — the droid link added
+  // below (to that specific droid's own build log/diary page) is
+  // read-only, it never carries any edit capability of its own.
   const editingItem = editId ? buildLogs.find((p) => p.id === editId && p.ownerId === currentUser.id) : null;
+
+  // The "droid" field on a post is just a type/name string (e.g. "MSE-6"),
+  // not a reference to a specific Our Droids entry — a member can own more
+  // than one of the same type. So a post links to that droid's own page
+  // only when its poster (ownerId) has exactly one Our Droids entry of
+  // that same type; with none, or more than one and no way to tell them
+  // apart, the droid name is left as plain text rather than guessing.
+  const droidLinkFor = (p) => {
+    if (!p.ownerId) return null;
+    const matches = (droidShowcase || []).filter((d) => d.ownerId === p.ownerId && d.droidType === p.droid);
+    return matches.length === 1 ? matches[0] : null;
+  };
 
   const posts = buildLogs.length === 0
     ? `<p class="sub">No build log posts yet — be the first to share progress with the form on the right.</p>`
-    : `<div class="buildlog-grid">${buildLogs.map((p) => `
+    : `<div class="buildlog-grid">${buildLogs.map((p) => {
+      const linkedDroid = droidLinkFor(p);
+      const droidLabel = linkedDroid ? `<a href="/droid/${esc(linkedDroid.id)}">${esc(p.droid)}</a>` : esc(p.droid);
+      return `
       <div class="buildlog-card">
         <div class="thumb">${p.hasPhoto ? `<img src="/members/buildlog-photo/${esc(p.id)}?v=${esc(p.photoUpdatedAt || 0)}" alt="${esc(p.caption)}">` : 'PHOTO'}</div>
         <div class="body">
-          <div class="who">${esc(p.author)} &middot; ${esc(p.droid)}</div>
+          <div class="who">${esc(p.author)} &middot; ${droidLabel}</div>
           <div class="caption">${esc(p.caption)}</div>
           ${p.ownerId === currentUser.id ? `<div style="margin-top:8px;"><a class="btn-small" href="/members/dashboard?tab=logs&edit=${encodeURIComponent(p.id)}">Edit</a></div>` : ''}
         </div>
-      </div>`).join('')}</div>`;
+      </div>`;
+    }).join('')}</div>`;
 
   const formTitle = editingItem ? 'Edit Your Update' : 'Share a Build Update';
   const formAction = editingItem ? '/members/logs/update' : '/members/add-buildlog?tab=logs';
@@ -2338,7 +2357,7 @@ function dashboardHTML({ tab, openEventId, editId, events, rsvps, addedDroids, u
     : tab === 'droids' ? droidsTabHTML(droidShowcase || [], currentUser, droidsError, droidsNotice, editId, droidTypes || [])
     : tab === 'assets' ? assetsTabHTML(assets || [], assetPhotos || [], currentUser, assetsError, assetsNotice, editId)
     : tab === 'files' ? filesTabHTML(memberFiles || [], fileCategories || [])
-    : logsTabHTML(buildLogs, currentUser, logError, logNotice, editId, droidTypes || []);
+    : logsTabHTML(buildLogs, currentUser, logError, logNotice, editId, droidTypes || [], droidShowcase || []);
 
   return `<!doctype html>
 <html lang="en"><head>${HEAD}${PHOTO_EDITOR_HEAD}<title>Members Dashboard — Norwich Droids</title></head>
@@ -3510,7 +3529,7 @@ export default {
       const users = tab === 'directory' ? await listUsers(env) : [];
       const buildLogs = tab === 'logs' ? await claimLegacyBuildLogs(env, await getBuildLogs(env), currentUser) : [];
       const galleryItems = tab === 'gallery' ? await getGalleryIndex(env) : [];
-      const droidShowcase = tab === 'droids' ? await getDroidShowcase(env) : [];
+      const droidShowcase = (tab === 'droids' || tab === 'logs') ? await getDroidShowcase(env) : [];
       const assets = tab === 'assets' ? await getAssets(env) : [];
       const assetPhotos = tab === 'assets' ? await getAssetPhotoIndex(env) : [];
       const memberFiles = tab === 'files' ? await getMemberFiles(env) : [];
@@ -3575,7 +3594,7 @@ export default {
         const buildLogs = await claimLegacyBuildLogs(env, await getBuildLogs(env), currentUser);
         return htmlResponse(dashboardHTML({
           tab: 'logs', openEventId: '', events: [], rsvps: {}, addedDroids: {}, users: [],
-          buildLogs, logError, logNotice, galleryItems: [], currentUser, droidTypes: await getDroidTypes(env),
+          buildLogs, logError, logNotice, galleryItems: [], droidShowcase: await getDroidShowcase(env), currentUser, droidTypes: await getDroidTypes(env),
         }));
       };
 
@@ -3646,7 +3665,7 @@ export default {
         const buildLogs = await claimLegacyBuildLogs(env, await getBuildLogs(env), currentUser);
         return htmlResponse(dashboardHTML({
           tab: 'logs', openEventId: '', editId: editId || '', events: [], rsvps: {}, addedDroids: {}, users: [],
-          buildLogs, logError, logNotice, galleryItems: [], currentUser, droidTypes: await getDroidTypes(env),
+          buildLogs, logError, logNotice, galleryItems: [], droidShowcase: await getDroidShowcase(env), currentUser, droidTypes: await getDroidTypes(env),
         }));
       };
 
