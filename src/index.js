@@ -147,7 +147,7 @@ const SEED_BUILD_LOGS = [
 // club's first admin has been created.
 const SETUP_TOKEN = '9856825dfffddf49fc0139a57840850be646264818193ba5';
 
-const TABS = ['events', 'directory', 'logs', 'gallery', 'droids', 'files'];
+const TABS = ['events', 'directory', 'logs', 'gallery', 'droids', 'assets', 'files'];
 const SESSION_COOKIE = 'nd_session';
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 const PBKDF2_ITERATIONS = 100000;
@@ -652,6 +652,43 @@ async function getDroidShowcasePhoto(env, id) {
 
 async function deleteDroidShowcasePhoto(env, id) {
   await env.DATA.delete(`droidshowcasephoto:${id}`);
+}
+
+// --- Asset tracker (props/backdrops — members add, admin moderates) ------
+// A shared inventory of club-owned props, backdrops, and the like, each
+// with a required photo so it's obvious what the item actually is at a
+// glance. Same index-plus-blob split, and same member-adds/edits-their-own,
+// admin-can-remove-any pattern as the Our Droids showcase above — but
+// members-only throughout (no public page), since this is internal
+// logistics rather than something for visitors to see.
+
+async function getAssets(env) {
+  const raw = await env.DATA.get('assetIndex');
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveAssets(env, items) {
+  await env.DATA.put('assetIndex', JSON.stringify(items));
+}
+
+async function saveAssetPhoto(env, id, contentType, base64Data) {
+  await env.DATA.put(`assetphoto:${id}`, JSON.stringify({ contentType, data: base64Data }));
+}
+
+async function getAssetPhoto(env, id) {
+  const raw = await env.DATA.get(`assetphoto:${id}`);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+async function deleteAssetPhoto(env, id) {
+  await env.DATA.delete(`assetphoto:${id}`);
 }
 
 // --- Per-droid build log (diary-style, owner posts, admin can moderate) --
@@ -1644,6 +1681,121 @@ function buildStatusBadge(status) {
   return `<span class="status-badge ${def.className}">${esc(def.label)}</span>`;
 }
 
+// Asset tracker categories — a fixed, short list (unlike droid types, this
+// isn't expected to grow much) rather than an admin-managed one.
+const ASSET_CATEGORIES = {
+  prop: 'Prop',
+  backdrop: 'Backdrop',
+  other: 'Other',
+};
+
+function assetCategoryLabel(category) {
+  return ASSET_CATEGORIES[category] || ASSET_CATEGORIES.other;
+}
+
+function assetCategoryOptions(selected) {
+  return Object.entries(ASSET_CATEGORIES)
+    .map(([value, label]) => `<option value="${esc(value)}" ${selected === value ? 'selected' : ''}>${esc(label)}</option>`)
+    .join('');
+}
+
+// Same opt-in-badge pattern as BUILD_STATUSES above — left blank by default
+// rather than defaulting to "Good", since whoever logs an item may not
+// know its condition yet.
+const ASSET_CONDITIONS = {
+  good: { label: 'Good', className: 'status-good' },
+  'needs-repair': { label: 'Needs Repair', className: 'status-needs-repair' },
+  missing: { label: 'Missing', className: 'status-missing' },
+};
+
+function assetConditionBadge(condition) {
+  const def = ASSET_CONDITIONS[condition];
+  if (!def) return '';
+  return `<span class="status-badge ${def.className}">${esc(def.label)}</span>`;
+}
+
+function assetConditionOptions(selected) {
+  const opts = Object.entries(ASSET_CONDITIONS)
+    .map(([value, def]) => `<option value="${esc(value)}" ${selected === value ? 'selected' : ''}>${esc(def.label)}</option>`)
+    .join('');
+  return `<option value=""${!selected ? ' selected' : ''}>&mdash; Not set &mdash;</option>${opts}`;
+}
+
+// Members Area > Assets — a shared inventory of props, backdrops, and other
+// club-owned items, each with a required photo so it's obvious what the
+// item is at a glance. Any member can add one and edit their own entry
+// (same ownerId-gated pattern as Our Droids); an admin can remove any of
+// them from Admin > Assets. Members-only — never shown on the public site.
+function assetsTabHTML(assets, currentUser, error, notice, editId) {
+  const editingItem = editId ? assets.find((a) => a.id === editId && a.ownerId === currentUser.id) : null;
+
+  const cards = assets.length === 0
+    ? `<p class="sub">No assets logged yet — be the first to add one with the form on the right.</p>`
+    : `<div class="card-grid">${assets.map((a) => `
+      <div class="card">
+        <div class="thumb"><img src="/members/asset-photo/${esc(a.id)}" alt="${esc(a.name)}"></div>
+        <div class="body">
+          <h4>${esc(a.name)} ${assetConditionBadge(a.condition)}</h4>
+          <p>${esc(assetCategoryLabel(a.category))}${a.location ? ` &middot; ${esc(a.location)}` : ''}</p>
+          ${a.description ? `<p>${esc(a.description)}</p>` : ''}
+          <p style="margin-top:6px; font-size:12.5px; color:var(--muted);">
+            Added by ${esc(a.addedByName)}
+            ${a.ownerId === currentUser.id ? ` &middot; <a class="btn-small" href="/members/dashboard?tab=assets&edit=${encodeURIComponent(a.id)}">Edit</a>` : ''}
+          </p>
+        </div>
+      </div>`).join('')}</div>`;
+
+  const formTitle = editingItem ? 'Edit Asset' : 'Add an Asset';
+  const formAction = editingItem ? '/members/assets/update' : '/members/assets/upload';
+  const submitLabel = editingItem ? 'Save Changes' : 'Add Asset';
+
+  return `
+    <div class="split-layout">
+      <div class="split-main">${cards}</div>
+      <aside class="split-sidebar">
+        <div class="login-card" style="max-width:none; margin:0;">
+          <h1 style="font-size:16px; text-align:left;">${formTitle}</h1>
+          ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
+          ${notice ? `<div class="admin-success">${esc(notice)}</div>` : ''}
+          <form method="post" action="${formAction}" enctype="multipart/form-data">
+            ${editingItem ? `<input type="hidden" name="asset_id" value="${esc(editingItem.id)}">` : ''}
+            <div class="field">
+              <label for="asset_name">Name</label>
+              <input type="text" id="asset_name" name="name" maxlength="80" placeholder="e.g. Blue lightsaber prop" value="${editingItem ? esc(editingItem.name) : ''}" required>
+            </div>
+            <div class="field">
+              <label for="asset_category">Category</label>
+              <select id="asset_category" name="category">
+                ${assetCategoryOptions(editingItem ? editingItem.category : 'prop')}
+              </select>
+            </div>
+            <div class="field">
+              <label for="asset_photo">Photo ${editingItem ? '<span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — leave blank to keep the current photo)</span>' : '<span style="font-weight:400; text-transform:none; letter-spacing:0;">(so everyone can see what it is)</span>'}</label>
+              <input type="file" id="asset_photo" name="photo" accept="image/jpeg,image/png,image/webp" data-photo-editor ${editingItem ? '' : 'required'}>
+            </div>
+            <div class="field">
+              <label for="asset_location">Location <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional — who's storing it, or where)</span></label>
+              <input type="text" id="asset_location" name="location" maxlength="100" placeholder="e.g. Jason's garage" value="${editingItem ? esc(editingItem.location || '') : ''}">
+            </div>
+            <div class="field">
+              <label for="asset_condition">Condition <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span></label>
+              <select id="asset_condition" name="condition">
+                ${assetConditionOptions(editingItem ? editingItem.condition : '')}
+              </select>
+            </div>
+            <div class="field">
+              <label for="asset_description">Description <span style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span></label>
+              <textarea id="asset_description" name="description" rows="3" maxlength="300" placeholder="Anything else worth noting.">${editingItem ? esc(editingItem.description || '') : ''}</textarea>
+            </div>
+            <button type="submit" class="btn btn-primary">${submitLabel}</button>
+            ${editingItem ? `<a href="/members/dashboard?tab=assets" class="btn-small" style="margin-left:10px;">Cancel</a>` : ''}
+          </form>
+          <p style="font-size:12px; color:var(--muted); margin:12px 0 0;">JPEG, PNG or WEBP, up to 1.5MB. Members-only — never shown on the public site. You can edit your own entry any time — an admin can remove any entry from Admin &gt; Assets.</p>
+        </div>
+      </aside>
+    </div>`;
+}
+
 function droidsTabHTML(droidShowcase, currentUser, error, notice, editId, droidTypes) {
   // Same owner-only edit rule as build logs / gallery above.
   const editingItem = editId ? droidShowcase.find((d) => d.id === editId && d.ownerId === currentUser.id) : null;
@@ -2039,6 +2191,7 @@ function dashNav(active, currentUser) {
     <a href="/members/dashboard?tab=logs" class="${active === 'logs' ? 'active' : ''}">Build Logs</a>
     <a href="/members/dashboard?tab=gallery" class="${active === 'gallery' ? 'active' : ''}">Gallery</a>
     <a href="/members/dashboard?tab=droids" class="${active === 'droids' ? 'active' : ''}">Our Droids</a>
+    <a href="/members/dashboard?tab=assets" class="${active === 'assets' ? 'active' : ''}">Assets</a>
     <a href="/members/dashboard?tab=files" class="${active === 'files' ? 'active' : ''}">Files</a>
     ${currentUser.role === 'admin' ? `<a href="/members/admin" class="${active === 'admin' ? 'active' : ''}">Admin</a>` : ''}
     <a href="/members/change-password" class="${active === 'change-password' ? 'active' : ''}">My Account</a>
@@ -2048,11 +2201,12 @@ function dashNav(active, currentUser) {
 </div>`;
 }
 
-function dashboardHTML({ tab, openEventId, editId, events, rsvps, addedDroids, users, buildLogs, logError, logNotice, galleryItems, galleryError, galleryNotice, droidShowcase, droidsError, droidsNotice, eventsError, eventsNotice, currentUser, droidTypes, memberFiles, fileCategories, eventPhotos = [] }) {
+function dashboardHTML({ tab, openEventId, editId, events, rsvps, addedDroids, users, buildLogs, logError, logNotice, galleryItems, galleryError, galleryNotice, droidShowcase, droidsError, droidsNotice, eventsError, eventsNotice, currentUser, droidTypes, memberFiles, fileCategories, eventPhotos = [], assets = [], assetsError = '', assetsNotice = '' }) {
   const content = tab === 'events' ? eventsTabHTML(events, rsvps, addedDroids, openEventId, eventsError, eventsNotice, droidTypes || [], eventPhotos)
     : tab === 'directory' ? directoryTabHTML(users)
     : tab === 'gallery' ? galleryTabHTML(galleryItems, currentUser, galleryError, galleryNotice, editId, events)
     : tab === 'droids' ? droidsTabHTML(droidShowcase || [], currentUser, droidsError, droidsNotice, editId, droidTypes || [])
+    : tab === 'assets' ? assetsTabHTML(assets || [], currentUser, assetsError, assetsNotice, editId)
     : tab === 'files' ? filesTabHTML(memberFiles || [], fileCategories || [])
     : logsTabHTML(buildLogs, currentUser, logError, logNotice, editId, droidTypes || []);
 
@@ -2176,6 +2330,7 @@ function adminSubNav(active) {
     <a href="/members/admin/logs" class="${active === 'logs' ? 'active' : ''}">Build Logs</a>
     <a href="/members/admin/gallery" class="${active === 'gallery' ? 'active' : ''}">Gallery</a>
     <a href="/members/admin/droids" class="${active === 'droids' ? 'active' : ''}">Droids</a>
+    <a href="/members/admin/assets" class="${active === 'assets' ? 'active' : ''}">Assets</a>
     <a href="/members/admin/files" class="${active === 'files' ? 'active' : ''}">Files</a>
   </div>`;
 }
@@ -2730,6 +2885,58 @@ document.querySelectorAll('form[action="/members/admin/droids/delete"]').forEach
 </body></html>`;
 }
 
+// Admin > Assets — moderation only (remove any asset that shouldn't be
+// listed); adding and editing stays with whoever owns each entry, from the
+// Assets tab itself, same as Our Droids above.
+function adminAssetsHTML({ currentUser, assets, error, notice }) {
+  const rows = assets.map((a) => `
+    <tr>
+      <td><div class="thumb" style="width:64px; height:64px; border-radius:4px;"><img src="/members/asset-photo/${esc(a.id)}" alt=""></div></td>
+      <td>${esc(a.name)}</td>
+      <td>${esc(assetCategoryLabel(a.category))}</td>
+      <td>${esc(a.addedByName)}</td>
+      <td>${a.location ? esc(a.location) : '<span style="color:var(--muted);">&mdash;</span>'}</td>
+      <td>${assetConditionBadge(a.condition) || '<span style="color:var(--muted);">&mdash;</span>'}</td>
+      <td class="admin-actions">
+        <form method="post" action="/members/admin/assets/delete" onsubmit="return false;" data-asset="${esc(a.name)}">
+          <input type="hidden" name="asset_id" value="${esc(a.id)}">
+          <button type="submit" class="btn-small btn-danger">Delete</button>
+        </form>
+      </td>
+    </tr>`).join('');
+
+  return `<!doctype html>
+<html lang="en"><head>${HEAD}<title>Admin · Assets — Norwich Droids</title></head>
+<body>
+${dashNav('admin', currentUser)}
+<div class="dash-main">
+  <h1>Admin</h1>
+  <p class="sub">Remove any prop, backdrop, or other asset that shouldn't be listed. Members add and edit their own from the Assets tab.</p>
+  ${adminSubNav('assets')}
+
+  ${error ? `<div class="login-error">${esc(error)}</div>` : ''}
+  ${notice ? `<div class="admin-success">${esc(notice)}</div>` : ''}
+
+  <div class="admin-table-wrap">
+    <table class="admin-table">
+      <thead><tr><th>Photo</th><th>Name</th><th>Category</th><th>Added By</th><th>Location</th><th>Condition</th><th>Actions</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="7">No assets logged yet.</td></tr>`}</tbody>
+    </table>
+  </div>
+</div>
+<script>
+document.querySelectorAll('form[action="/members/admin/assets/delete"]').forEach((f) => {
+  f.addEventListener('submit', () => {
+    if (confirm('Delete "' + f.dataset.asset + '"? This cannot be undone.')) {
+      f.removeAttribute('onsubmit');
+      HTMLFormElement.prototype.submit.call(f);
+    }
+  });
+});
+</script>
+</body></html>`;
+}
+
 // Admin > Files — the only place files get uploaded, edited, or removed
 // (members can only browse/download from their own Files tab — see
 // filesTabHTML above). Combines three things on one page: category
@@ -3171,12 +3378,13 @@ export default {
       const buildLogs = tab === 'logs' ? await getBuildLogs(env) : [];
       const galleryItems = tab === 'gallery' ? await getGalleryIndex(env) : [];
       const droidShowcase = tab === 'droids' ? await getDroidShowcase(env) : [];
+      const assets = tab === 'assets' ? await getAssets(env) : [];
       const memberFiles = tab === 'files' ? await getMemberFiles(env) : [];
       const fileCategories = tab === 'files' ? await getFileCategories(env) : [];
       const eventPhotos = tab === 'events' ? await getEventPhotoIndex(env) : [];
       const droidTypes = await getDroidTypes(env);
       return htmlResponse(dashboardHTML({
-        tab, openEventId: url.searchParams.get('open') || '', editId: url.searchParams.get('edit') || '', events, rsvps, addedDroids, users, buildLogs, galleryItems, droidShowcase, droidTypes, memberFiles, fileCategories, eventPhotos,
+        tab, openEventId: url.searchParams.get('open') || '', editId: url.searchParams.get('edit') || '', events, rsvps, addedDroids, users, buildLogs, galleryItems, droidShowcase, droidTypes, memberFiles, fileCategories, eventPhotos, assets,
         eventsError: '', eventsNotice: '', droidsError: '', droidsNotice: '', currentUser,
       }));
     }
@@ -3594,6 +3802,132 @@ export default {
       return await renderWith('', 'Droid entry updated.');
     }
 
+    // --- Asset tracker (props/backdrops) — any member can add one and edit
+    // their own entry; an admin can remove any (see Admin > Assets). Same
+    // shape as the Our Droids routes just above, plus a couple of extra
+    // fields (category, location, condition) and members-only visibility.
+
+    if (path === '/members/assets/upload' && request.method === 'POST') {
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      const renderWith = async (assetsError, assetsNotice) => {
+        const assets = await getAssets(env);
+        return htmlResponse(dashboardHTML({
+          tab: 'assets', openEventId: '', events: [], rsvps: {}, addedDroids: {}, users: [], buildLogs: [],
+          galleryItems: [], assets, assetsError, assetsNotice, currentUser, droidTypes: await getDroidTypes(env),
+        }));
+      };
+
+      const form = await request.formData();
+      const name = String(form.get('name') || '').trim().slice(0, 80);
+      const submittedCategory = String(form.get('category') || '').trim();
+      const category = ASSET_CATEGORIES[submittedCategory] ? submittedCategory : 'other';
+      const location = String(form.get('location') || '').trim().slice(0, 100);
+      const submittedCondition = String(form.get('condition') || '').trim();
+      const condition = ASSET_CONDITIONS[submittedCondition] ? submittedCondition : '';
+      const description = String(form.get('description') || '').trim().slice(0, 300);
+      const file = form.get('photo');
+      if (!name) {
+        return await renderWith('Please give the asset a name.', '');
+      }
+      if (!file || typeof file === 'string' || !file.size) {
+        return await renderWith('Please choose a photo to upload.', '');
+      }
+      if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
+        return await renderWith('Photos must be JPEG, PNG, or WEBP.', '');
+      }
+      if (file.size > MAX_PHOTO_UPLOAD_BYTES) {
+        return await renderWith('That photo is too large to upload — please use a file under 8MB.', '');
+      }
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const mismatch = imageMismatchMessage(bytes, file.type);
+      if (mismatch) {
+        return await renderWith(mismatch, '');
+      }
+      const prepared = await prepareUploadedPhoto(bytes, file.type);
+      if (prepared.errorMessage) {
+        return await renderWith(prepared.errorMessage, '');
+      }
+      const id = crypto.randomUUID();
+      await saveAssetPhoto(env, id, prepared.contentType, bytesToBase64(prepared.bytes));
+      const assets = await getAssets(env);
+      // ownerId lets whoever added this edit it later from the Assets tab —
+      // see /members/assets/update below. addedByName is just a display
+      // label and can drift from ownerId if an admin renames the member.
+      assets.unshift({ id, name, category, location, condition, description, addedByName: currentUser.name, createdAt: new Date().toISOString(), ownerId: currentUser.id });
+      await saveAssets(env, assets);
+      return htmlResponse(dashboardHTML({
+        tab: 'assets', openEventId: '', events: [], rsvps: {}, addedDroids: {}, users: [], buildLogs: [],
+        galleryItems: [], assets, assetsError: '', assetsNotice: 'Asset added.', currentUser, droidTypes: await getDroidTypes(env),
+      }));
+    }
+
+    // A member editing their OWN asset entry (ownerId-gated).
+    if (path === '/members/assets/update' && request.method === 'POST') {
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      const renderWith = async (assetsError, assetsNotice, editId) => {
+        const assets = await getAssets(env);
+        return htmlResponse(dashboardHTML({
+          tab: 'assets', openEventId: '', editId: editId || '', events: [], rsvps: {}, addedDroids: {}, users: [], buildLogs: [],
+          galleryItems: [], assets, assetsError, assetsNotice, currentUser, droidTypes: await getDroidTypes(env),
+        }));
+      };
+
+      const form = await request.formData();
+      const assetId = String(form.get('asset_id') || '');
+      const name = String(form.get('name') || '').trim().slice(0, 80);
+      const submittedCategory = String(form.get('category') || '').trim();
+      const category = ASSET_CATEGORIES[submittedCategory] ? submittedCategory : 'other';
+      const location = String(form.get('location') || '').trim().slice(0, 100);
+      const submittedCondition = String(form.get('condition') || '').trim();
+      const condition = ASSET_CONDITIONS[submittedCondition] ? submittedCondition : '';
+      const description = String(form.get('description') || '').trim().slice(0, 300);
+
+      const assets = await getAssets(env);
+      const item = assets.find((a) => a.id === assetId);
+      // Ownership is checked server-side, not just hidden in the UI — a
+      // member can't edit another member's entry by forging the asset_id.
+      if (!item || item.ownerId !== currentUser.id) {
+        return await renderWith('You can only edit your own asset entry.', '');
+      }
+
+      if (!name) {
+        return await renderWith('Please give the asset a name.', '', assetId);
+      }
+
+      const file = form.get('photo');
+      const hasFile = file && typeof file !== 'string' && file.size;
+      if (hasFile) {
+        if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
+          return await renderWith('Photos must be JPEG, PNG, or WEBP.', '', assetId);
+        }
+        if (file.size > MAX_PHOTO_UPLOAD_BYTES) {
+          return await renderWith('That photo is too large to upload — please use a file under 8MB.', '', assetId);
+        }
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const mismatch = imageMismatchMessage(bytes, file.type);
+        if (mismatch) {
+          return await renderWith(mismatch, '', assetId);
+        }
+        const prepared = await prepareUploadedPhoto(bytes, file.type);
+        if (prepared.errorMessage) {
+          return await renderWith(prepared.errorMessage, '', assetId);
+        }
+        await saveAssetPhoto(env, assetId, prepared.contentType, bytesToBase64(prepared.bytes));
+      }
+
+      item.name = name;
+      item.category = category;
+      item.location = location;
+      item.condition = condition;
+      item.description = description;
+      await saveAssets(env, assets);
+      return await renderWith('', 'Asset updated.');
+    }
+
     // --- Per-droid build log (diary-style) — these live under
     // /droid/<id>/log/... rather than /members/..., since they belong to
     // the public build-log page above, but every one of them still needs a
@@ -3978,6 +4312,27 @@ export default {
 
       const photoId = path.slice('/members/event-photo/'.length);
       const photo = await getEventPhotoBlob(env, photoId);
+      if (!photo) return htmlResponse('Not found.', 404);
+      const bytes = base64ToBytes(photo.data);
+      return new Response(bytes, {
+        status: 200,
+        headers: {
+          'Content-Type': photo.contentType,
+          'Cache-Control': 'private, max-age=86400',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
+    }
+
+    if (path.startsWith('/members/asset-photo/') && request.method === 'GET') {
+      // Same reasoning as build log / event photos above — asset photos
+      // are only ever shown inside the members-only Assets tab, so this is
+      // session-gated too, not a public URL.
+      const currentUser = await getSessionUser(request, env);
+      if (!currentUser) return redirect('/members/login');
+
+      const assetId = path.slice('/members/asset-photo/'.length);
+      const photo = await getAssetPhoto(env, assetId);
       if (!photo) return htmlResponse('Not found.', 404);
       const bytes = base64ToBytes(photo.data);
       return new Response(bytes, {
@@ -4603,6 +4958,30 @@ export default {
         const remaining = droidTypes.filter((t) => t !== typeName);
         await saveDroidTypes(env, remaining);
         return htmlResponse(adminDroidsHTML({ currentUser, droidShowcase, error: '', notice: `"${typeName}" was removed from the droid type list.`, droidTypes: remaining }));
+      }
+
+      // --- Asset tracker moderation (remove any asset) ---------------------
+      // Adding and editing stays with whoever owns each entry, from the
+      // Assets tab itself — see /members/assets/upload and
+      // /members/assets/update above.
+
+      if (path === '/members/admin/assets' && request.method === 'GET') {
+        const assets = await getAssets(env);
+        return htmlResponse(adminAssetsHTML({ currentUser, assets, error: '', notice: '' }));
+      }
+
+      if (path === '/members/admin/assets/delete' && request.method === 'POST') {
+        const form = await request.formData();
+        const assetId = String(form.get('asset_id') || '');
+        const assets = await getAssets(env);
+        const target = assets.find((a) => a.id === assetId);
+        if (!target) {
+          return htmlResponse(adminAssetsHTML({ currentUser, assets, error: 'Asset not found.', notice: '' }), 400);
+        }
+        const remaining = assets.filter((a) => a.id !== assetId);
+        await saveAssets(env, remaining);
+        await deleteAssetPhoto(env, assetId);
+        return htmlResponse(adminAssetsHTML({ currentUser, assets: remaining, error: '', notice: 'Asset deleted.' }));
       }
 
       // --- Files management (admin-only upload/edit/delete) ---------------
