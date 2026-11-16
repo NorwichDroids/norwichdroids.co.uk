@@ -919,6 +919,22 @@ function eventSortIso(e) {
   return dayMonthYearToIso(firstDay, e.month, e.year) || '9999-99-99';
 }
 
+// Start/end ISO dates an event actually covers, for marking it on the
+// Members Area calendar widget (a multi-day event marks every day in its
+// range, not just the first). Returns nulls when the date can't be
+// resolved at all (same unresolvable-date cases eventSortIso/eventIsUpcoming
+// already handle) — those events still show in the card list, just don't
+// get a dot on the calendar.
+function eventCalendarDateRange(e) {
+  const dayStr = String(e.day || '');
+  const rangeMatch = dayStr.match(/^(\d+)\s*[–-]\s*(\d+)$/);
+  const firstDay = rangeMatch ? rangeMatch[1] : dayStr;
+  const lastDay = rangeMatch ? rangeMatch[2] : dayStr;
+  const startIso = dayMonthYearToIso(firstDay, e.month, e.year) || null;
+  const endIso = dayMonthYearToIso(lastDay, e.month, e.year) || startIso;
+  return { startIso, endIso };
+}
+
 // Short "Title — 12 SEP 2026" label used for the event picker on the
 // Gallery upload form, and options for that dropdown (most recent first,
 // plus a "General Photos" choice for anything not tied to a specific event).
@@ -1408,9 +1424,140 @@ ${publicFoot()}
 
 function eventsTabHTML(events, rsvps, addedDroids, openEventId, error, notice, droidTypes, eventPhotos) {
   const photosByEventId = eventPhotos || [];
-  const list = events.length === 0
+
+  // Events come in from KV in whatever order they were added/edited, not
+  // date order — sort a copy chronologically (soonest first) for display,
+  // same ordering the public Events page already uses. Unresolvable dates
+  // sort last rather than jumping to the front.
+  const sortedEvents = [...events].sort((a, b) => (eventSortIso(a) < eventSortIso(b) ? -1 : eventSortIso(a) > eventSortIso(b) ? 1 : 0));
+
+  // Data for the calendar widget above the list — one entry per event with
+  // a resolvable date, with every day it covers (multi-day events included)
+  // so clicking a marked date can show which event(s) land on it.
+  const calendarEntries = sortedEvents
+    .map((ev) => {
+      const { startIso, endIso } = eventCalendarDateRange(ev);
+      return startIso ? { id: ev.id, title: ev.title, startIso, endIso } : null;
+    })
+    .filter(Boolean);
+  // Escape '<' so a title containing "</script>" can't break out of the
+  // embedded JSON block below.
+  const calendarEntriesJson = JSON.stringify(calendarEntries).replace(/</g, '\\u003c');
+
+  const calendar = `
+    <div class="event-calendar" id="event-calendar">
+      <div class="event-calendar-header">
+        <button type="button" id="cal-prev" aria-label="Previous month">&larr;</button>
+        <div class="event-calendar-title" id="cal-title"></div>
+        <button type="button" id="cal-next" aria-label="Next month">&rarr;</button>
+      </div>
+      <div class="event-calendar-weekdays">
+        <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
+      </div>
+      <div class="event-calendar-grid" id="cal-grid"></div>
+      <div class="event-calendar-selected" id="cal-selected" hidden></div>
+    </div>
+    <script type="application/json" id="cal-event-data">${calendarEntriesJson}</script>
+    <script>
+    (function () {
+      var calEl = document.getElementById('event-calendar');
+      var dataEl = document.getElementById('cal-event-data');
+      var events;
+      try { events = JSON.parse(dataEl.textContent); } catch (e) { events = []; }
+      if (!events.length) { if (calEl) calEl.hidden = true; return; }
+
+      function escHtml(s) {
+        return String(s).replace(/[&<>"']/g, function (c) {
+          return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+        });
+      }
+
+      // 'YYYY-MM-DD' -> [{id, title}], covering every day of multi-day events.
+      var byDate = {};
+      events.forEach(function (ev) {
+        var d = new Date(ev.startIso + 'T00:00:00');
+        var end = new Date(ev.endIso + 'T00:00:00');
+        var guard = 0;
+        while (d <= end && guard < 60) {
+          var key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+          (byDate[key] = byDate[key] || []).push({ id: ev.id, title: ev.title });
+          d.setDate(d.getDate() + 1);
+          guard++;
+        }
+      });
+
+      var now = new Date();
+      var todayKey = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+      var sortedKeys = Object.keys(byDate).sort();
+      var startKey = sortedKeys.find(function (k) { return k >= todayKey; }) || sortedKeys[0] || todayKey;
+      var view = new Date(startKey + 'T00:00:00');
+      view.setDate(1);
+
+      var titleEl = document.getElementById('cal-title');
+      var gridEl = document.getElementById('cal-grid');
+      var selectedEl = document.getElementById('cal-selected');
+      var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+      function showSelected(dayEvents, label) {
+        selectedEl.hidden = false;
+        selectedEl.innerHTML = '<div class="event-calendar-selected-label">' + escHtml(label) + '</div>' +
+          dayEvents.map(function (ev) { return '<a href="#event-' + escHtml(ev.id) + '">' + escHtml(ev.title) + '</a>'; }).join('');
+      }
+
+      function render() {
+        titleEl.textContent = MONTHS[view.getMonth()] + ' ' + view.getFullYear();
+        gridEl.innerHTML = '';
+        var first = new Date(view.getFullYear(), view.getMonth(), 1);
+        var startOffset = (first.getDay() + 6) % 7; // Monday-first grid
+        var daysInMonth = new Date(view.getFullYear(), view.getMonth() + 1, 0).getDate();
+        for (var i = 0; i < startOffset; i++) {
+          var pad = document.createElement('div');
+          pad.className = 'event-calendar-day other-month';
+          gridEl.appendChild(pad);
+        }
+        for (var day = 1; day <= daysInMonth; day++) {
+          var key = view.getFullYear() + '-' + String(view.getMonth() + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+          var cell = document.createElement('div');
+          cell.className = 'event-calendar-day' + (key === todayKey ? ' today' : '');
+          var num = document.createElement('span');
+          num.textContent = String(day);
+          cell.appendChild(num);
+          var dayEvents = byDate[key];
+          if (dayEvents && dayEvents.length) {
+            cell.className += ' has-event';
+            var dot = document.createElement('span');
+            dot.className = 'event-calendar-dot';
+            cell.appendChild(dot);
+            cell.setAttribute('role', 'button');
+            cell.setAttribute('tabindex', '0');
+            var label = MONTHS[view.getMonth()] + ' ' + day + ', ' + view.getFullYear();
+            cell.addEventListener('click', function (evts, lbl) { return function () { showSelected(evts, lbl); }; }(dayEvents, label));
+            cell.addEventListener('keydown', function (evts, lbl) {
+              return function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showSelected(evts, lbl); } };
+            }(dayEvents, label));
+          }
+          gridEl.appendChild(cell);
+        }
+      }
+
+      document.getElementById('cal-prev').addEventListener('click', function () {
+        view.setMonth(view.getMonth() - 1);
+        selectedEl.hidden = true;
+        render();
+      });
+      document.getElementById('cal-next').addEventListener('click', function () {
+        view.setMonth(view.getMonth() + 1);
+        selectedEl.hidden = true;
+        render();
+      });
+
+      render();
+    })();
+    </script>`;
+
+  const list = sortedEvents.length === 0
     ? `<p class="sub">No events on the calendar right now — an admin can add one, or suggest one yourself with the form on the right.</p>`
-    : events.map((ev) => {
+    : sortedEvents.map((ev) => {
     const status = rsvps[ev.id] || 'undecided';
     const statusLabel = status === 'going' ? "You're going" : (status === 'not-going' ? "You can't make it" : "You haven't responded yet");
     const droidsForEvent = [...ev.baseDroids, ...(Array.isArray(addedDroids[ev.id]) ? addedDroids[ev.id] : [])];
@@ -1418,7 +1565,7 @@ function eventsTabHTML(events, rsvps, addedDroids, openEventId, error, notice, d
     const photosForEvent = photosByEventId.filter((p) => p.eventId === ev.id);
 
     return `
-      <div class="event-card">
+      <div class="event-card" id="event-${esc(ev.id)}">
         <div class="row">
           <div class="event-date">
             <div class="day${ev.daySmall ? ' small' : ''}">${esc(ev.day)}</div>
@@ -1515,7 +1662,7 @@ function eventsTabHTML(events, rsvps, addedDroids, openEventId, error, notice, d
 
   return `
     <div class="split-layout">
-      <div class="split-main">${list}</div>
+      <div class="split-main">${calendar}${list}</div>
       <aside class="split-sidebar">
         <div class="login-card" style="max-width:none; margin:0;">
           <h1 style="font-size:16px; text-align:left;">Suggest an Event</h1>
