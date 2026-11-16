@@ -1525,9 +1525,6 @@ function eventsTabHTML(events, rsvps, addedDroids, openEventId, error, notice, d
           var dayEvents = byDate[key];
           if (dayEvents && dayEvents.length) {
             cell.className += ' has-event';
-            var dot = document.createElement('span');
-            dot.className = 'event-calendar-dot';
-            cell.appendChild(dot);
             cell.setAttribute('role', 'button');
             cell.setAttribute('tabindex', '0');
             var label = MONTHS[view.getMonth()] + ' ' + day + ', ' + view.getFullYear();
@@ -1555,9 +1552,15 @@ function eventsTabHTML(events, rsvps, addedDroids, openEventId, error, notice, d
     })();
     </script>`;
 
-  const list = sortedEvents.length === 0
-    ? `<p class="sub">No events on the calendar right now — an admin can add one, or suggest one yourself with the form on the right.</p>`
-    : sortedEvents.map((ev) => {
+  // Upcoming first, soonest at the very top; anything already past (kept
+  // around mainly so photos logged against it stay reachable) is tucked
+  // into a closed-by-default "Past Events" section underneath, most
+  // recent past event first, so it doesn't crowd out what's coming up.
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const upcomingEvents = sortedEvents.filter((ev) => eventIsUpcoming(ev, todayIso));
+  const pastEvents = sortedEvents.filter((ev) => !eventIsUpcoming(ev, todayIso)).reverse();
+
+  const renderEventCard = (ev) => {
     const status = rsvps[ev.id] || 'undecided';
     const statusLabel = status === 'going' ? "You're going" : (status === 'not-going' ? "You can't make it" : "You haven't responded yet");
     const droidsForEvent = [...ev.baseDroids, ...(Array.isArray(addedDroids[ev.id]) ? addedDroids[ev.id] : [])];
@@ -1658,7 +1661,24 @@ function eventsTabHTML(events, rsvps, addedDroids, openEventId, error, notice, d
           </div>
         </details>
       </div>`;
-  }).join('');
+  };
+
+  const upcomingList = upcomingEvents.length === 0
+    ? `<p class="sub">No upcoming events on the calendar right now — an admin can add one, or suggest one yourself with the form on the right.</p>`
+    : upcomingEvents.map(renderEventCard).join('');
+
+  const pastList = pastEvents.length === 0 ? '' : `
+    <details class="past-events-toggle">
+      <summary class="details-toggle">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3f6b4a" stroke-width="2.2"><path d="M6 9 L12 15 L18 9"/></svg>
+        <span>Past Events (${pastEvents.length})</span>
+      </summary>
+      <div class="past-events-list">${pastEvents.map(renderEventCard).join('')}</div>
+    </details>`;
+
+  const list = sortedEvents.length === 0
+    ? `<p class="sub">No events on the calendar right now — an admin can add one, or suggest one yourself with the form on the right.</p>`
+    : `${upcomingList}${pastList}`;
 
   return `
     <div class="split-layout">
