@@ -18,7 +18,13 @@
     { "binding": "DATA", "id": "f33939aa720842c49799c06f9244fbbd" }
   ]
 
-  // NOTE: this site now uses individual member logins (not a shared
-  // password), so there is no secret to configure here at all — see
-  // README.txt section 3 for the one-time step to create the first admin.
+  // NOTE: this site uses individual member logins (not a shared password),
+  // so there's nothing to configure here for that — see README.txt section
+  // 3 for the one-time step to create the first admin.
+  //
+  // There IS one optional secret you can add, but never here in
+  // wrangler.jsonc (secrets never belong in a file that ends up in
+  // GitHub) — RESEND_API_KEY, which turns on emailing members whenever an
+  // event is added/updated. See README.txt section 3B. Skip it entirely
+  // if you don't want that; everything else works fine without it.
 }
