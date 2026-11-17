@@ -1725,20 +1725,34 @@ function eventsTabHTML(events, rsvps, addedDroids, openEventId, error, notice, d
     </div>`;
 }
 
-function directoryTabHTML(users) {
+function directoryTabHTML(users, droidShowcase) {
   if (users.length === 0) {
     return `<p class="sub">No members yet — an admin can add them from the Admin tab.</p>`;
   }
-  return `<div class="directory-grid">${users.map((m) => `
+  // The "droid" field on a member's account is just a single line an admin
+  // can type in by hand — most members never get one set. Their actual
+  // builds live on the "Our Droids" tab instead (droidShowcase, one entry
+  // per droid, each linking to that droid's own build log/photo page), so
+  // show those here when there are any; the hand-typed field is only a
+  // fallback for a member who hasn't added one there yet, and "No build
+  // listed yet" only shows when neither exists.
+  const builds = droidShowcase || [];
+  return `<div class="directory-grid">${users.map((m) => {
+    const theirDroids = builds.filter((d) => d.ownerId === m.id);
+    const droidLine = theirDroids.length > 0
+      ? `Building: ${theirDroids.map((d) => `<a href="/droid/${esc(d.id)}">${esc(d.droidName || d.droidType)}</a>`).join(', ')}`
+      : (m.droid ? `Building: ${esc(m.droid)}` : 'No build listed yet');
+    return `
       <div class="directory-card">
         ${m.hasPhoto
           ? `<img class="avatar-img" src="/members/photo/${esc(m.id)}?v=${esc(m.photoUpdatedAt || 0)}" alt="${esc(m.name)}">`
           : `<div class="avatar">${esc(initials(m.name))}</div>`}
         <div>
           <div class="name">${esc(m.name)}${m.role === 'admin' ? ' <span class="role-badge">Admin</span>' : ''}</div>
-          <div class="droid">${m.droid ? `Building: ${esc(m.droid)}` : 'No build listed yet'}</div>
+          <div class="droid">${droidLine}</div>
         </div>
-      </div>`).join('')}</div>`;
+      </div>`;
+  }).join('')}</div>`;
 }
 
 function logsTabHTML(buildLogs, currentUser, error, notice, editId, droidTypes, droidShowcase) {
@@ -2519,7 +2533,7 @@ function dashNav(active, currentUser) {
 
 function dashboardHTML({ tab, openEventId, editId, events, rsvps, addedDroids, users, buildLogs, logError, logNotice, galleryItems, galleryError, galleryNotice, droidShowcase, droidsError, droidsNotice, eventsError, eventsNotice, currentUser, droidTypes, memberFiles, fileCategories, eventPhotos = [], assets = [], assetPhotos = [], assetsError = '', assetsNotice = '' }) {
   const content = tab === 'events' ? eventsTabHTML(events, rsvps, addedDroids, openEventId, eventsError, eventsNotice, droidTypes || [], eventPhotos)
-    : tab === 'directory' ? directoryTabHTML(users)
+    : tab === 'directory' ? directoryTabHTML(users, droidShowcase || [])
     : tab === 'gallery' ? galleryTabHTML(galleryItems, currentUser, galleryError, galleryNotice, editId, events)
     : tab === 'droids' ? droidsTabHTML(droidShowcase || [], currentUser, droidsError, droidsNotice, editId, droidTypes || [])
     : tab === 'assets' ? assetsTabHTML(assets || [], assetPhotos || [], currentUser, assetsError, assetsNotice, editId)
@@ -3696,7 +3710,7 @@ export default {
       const users = tab === 'directory' ? await listUsers(env) : [];
       const buildLogs = tab === 'logs' ? await claimLegacyBuildLogs(env, await getBuildLogs(env), currentUser) : [];
       const galleryItems = tab === 'gallery' ? await getGalleryIndex(env) : [];
-      const droidShowcase = (tab === 'droids' || tab === 'logs') ? await getDroidShowcase(env) : [];
+      const droidShowcase = (tab === 'droids' || tab === 'logs' || tab === 'directory') ? await getDroidShowcase(env) : [];
       const assets = tab === 'assets' ? await getAssets(env) : [];
       const assetPhotos = tab === 'assets' ? await getAssetPhotoIndex(env) : [];
       const memberFiles = tab === 'files' ? await getMemberFiles(env) : [];
