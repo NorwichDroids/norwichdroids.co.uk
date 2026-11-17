@@ -771,6 +771,99 @@ async function saveEvents(env, events) {
   await env.DATA.put('events', JSON.stringify(events));
 }
 
+// --- Event-change email notifications -------------------------------------
+// Sent to every member whenever an admin adds or edits an event, or
+// approves a member-submitted one — Cloudflare Workers can't send email
+// directly, so this goes through Resend (resend.com)'s HTTP API. Needs a
+// Worker secret called RESEND_API_KEY (see README section 3b); if it isn't
+// set yet, sending is skipped and the admin action that triggered it still
+// succeeds as normal — this is never allowed to block saving an event.
+const EVENT_EMAIL_FROM = 'Norwich Droids <events@norwichdroids.co.uk>';
+
+function eventEmailContent(event, changeType, siteOrigin) {
+  const dateParts = [event.day, event.month, event.year].filter(Boolean).join(' ');
+  const verb = changeType === 'added' ? 'A new event has been added' : 'An event has been updated';
+  const subject = `${verb.replace('has been ', '')}: ${event.title}`;
+  const detailsUrl = `${siteOrigin}/members/dashboard?tab=events&open=${encodeURIComponent(event.id)}`;
+
+  const text = [
+    `${verb} on the Norwich Droids calendar:`,
+    '',
+    event.title,
+    dateParts || 'Date TBC',
+    event.location || '',
+    '',
+    `See the full details and RSVP: ${detailsUrl}`,
+  ].join('\n');
+
+  const html = `
+    <p>${esc(verb)} on the Norwich Droids calendar:</p>
+    <p style="font-size:17px; font-weight:700; margin:0 0 4px; font-family:sans-serif;">${esc(event.title)}</p>
+    <p style="margin:0 0 4px; font-family:sans-serif;">${esc(dateParts || 'Date TBC')}</p>
+    <p style="margin:0 0 16px; font-family:sans-serif;">${esc(event.location || '')}</p>
+    <p style="font-family:sans-serif;"><a href="${esc(detailsUrl)}" style="color:#3f6b4a;">See full details and RSVP &rarr;</a></p>`;
+
+  return { subject, text, html };
+}
+
+// Sends the email, chunking recipients into groups of 100 (Resend's batch
+// endpoint limit) so a larger membership still works in one call per chunk.
+// Returns { sent, count, reason } rather than throwing — a failed or
+// unconfigured send is reported back to the admin as a notice, never as an
+// error that would make it look like the event itself failed to save.
+async function sendEventChangeNotification(env, event, changeType, siteOrigin) {
+  if (!env.RESEND_API_KEY) {
+    return { sent: false, count: 0, reason: 'no RESEND_API_KEY secret is configured yet' };
+  }
+  const users = await listUsers(env);
+  const recipients = users.filter((u) => u.email);
+  if (recipients.length === 0) {
+    return { sent: false, count: 0, reason: 'there are no members with an email address to notify' };
+  }
+
+  const { subject, text, html } = eventEmailContent(event, changeType, siteOrigin);
+  const chunks = [];
+  for (let i = 0; i < recipients.length; i += 100) chunks.push(recipients.slice(i, i + 100));
+
+  let sentCount = 0;
+  let lastError = '';
+  for (const chunk of chunks) {
+    const payload = chunk.map((u) => ({ from: EVENT_EMAIL_FROM, to: [u.email], subject, text, html }));
+    try {
+      const res = await fetch('https://api.resend.com/emails/batch', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        sentCount += chunk.length;
+      } else {
+        lastError = `Resend returned ${res.status}: ${(await res.text()).slice(0, 200)}`;
+      }
+    } catch (err) {
+      lastError = (err && err.message) || 'a network error contacting Resend';
+    }
+  }
+
+  if (sentCount === 0) return { sent: false, count: 0, reason: lastError || 'an unknown error' };
+  if (sentCount < recipients.length) return { sent: true, count: sentCount, reason: lastError };
+  return { sent: true, count: sentCount, reason: '' };
+}
+
+// Short suffix for the admin's existing success notice ("\"Title\" was
+// added.") reporting what happened with the notification email, so a
+// failure (most likely: the Resend secret hasn't been set up yet) is
+// visible right there rather than silently swallowed.
+function emailNoticeSuffix(result) {
+  if (result.sent && !result.reason) {
+    return ` Notified ${result.count} member${result.count === 1 ? '' : 's'} by email.`;
+  }
+  if (result.sent && result.reason) {
+    return ` Notified ${result.count} member(s) by email, but some did not go through (${result.reason}).`;
+  }
+  return ` (Notification email not sent — ${result.reason}.)`;
+}
+
 // Events any member has proposed, awaiting an admin's approve/reject —
 // kept entirely separate from the live "events" list so a submission never
 // shows up for RSVP or on anyone's calendar until an admin has looked at it.
@@ -5004,7 +5097,8 @@ export default {
         };
         events.push(newEvent);
         await saveEvents(env, events);
-        return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents, error: '', notice: `"${newEvent.title}" was added.`, editingEvent: null }));
+        const emailResult = await sendEventChangeNotification(env, newEvent, 'added', url.origin);
+        return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents, error: '', notice: `"${newEvent.title}" was added.${emailNoticeSuffix(emailResult)}`, editingEvent: null }));
       }
 
       if (path === '/members/admin/events/update' && request.method === 'POST') {
@@ -5038,7 +5132,8 @@ export default {
           isPrivate: form.get('is_private') === 'on',
         };
         await saveEvents(env, events);
-        return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents, error: '', notice: `"${events[idx].title}" was updated.`, editingEvent: null }));
+        const emailResult = await sendEventChangeNotification(env, events[idx], 'updated', url.origin);
+        return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents, error: '', notice: `"${events[idx].title}" was updated.${emailNoticeSuffix(emailResult)}`, editingEvent: null }));
       }
 
       if (path === '/members/admin/events/delete' && request.method === 'POST') {
@@ -5088,7 +5183,8 @@ export default {
         await saveEvents(env, events);
         const remainingPending = pendingEvents.filter((p) => p.pendingId !== pendingId);
         await savePendingEvents(env, remainingPending);
-        return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents: remainingPending, error: '', notice: `"${newEvent.title}" was approved and added to the calendar.`, editingEvent: null }));
+        const emailResult = await sendEventChangeNotification(env, newEvent, 'added', url.origin);
+        return htmlResponse(adminEventsHTML({ currentUser, events, pendingEvents: remainingPending, error: '', notice: `"${newEvent.title}" was approved and added to the calendar.${emailNoticeSuffix(emailResult)}`, editingEvent: null }));
       }
 
       if (path === '/members/admin/events/reject' && request.method === 'POST') {
