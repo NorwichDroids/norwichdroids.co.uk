@@ -159,6 +159,20 @@ itself — no dashboard steps needed:
     Member-submitted events don't include the admin-only logistics fields
     (parking, floor area, accommodation, fuel) — an admin can fill those in
     afterwards by editing the approved event if needed.
+  - From "Admin -> Events" you can also attach reference photos to any
+    event once it's been added — floor plans, parking maps, venue shots,
+    that kind of thing — so members know what to expect before they go.
+    Open the event's "Edit" screen and there's a "Photos for ..." panel
+    below the details form: pick one or more images (JPEG, PNG, or WEBP, up
+    to 4 at once, same batch-upload cap and all-or-nothing validation as the
+    Gallery's "Add Photos" form) and an optional caption shared across the
+    batch. These then show up on that event's own card on every member's
+    Events tab, under an "Event Photos" heading inside "Show / hide
+    details" — never on the public Events page, and only an admin can add
+    or remove them (unlike Gallery/Build Logs/Our Droids, there's no member
+    upload here — this is meant for official event info, not social
+    photos). Deleting one photo removes just that photo; deleting the event
+    itself removes all of its attached photos too.
   - Every member (not just admins) can add a profile photo from
     "My Account" — JPEG, PNG, or WEBP — which then shows next to their name
     in the Directory tab instead of their initials, AND on the PUBLIC About
@@ -180,7 +194,15 @@ itself — no dashboard steps needed:
     it can fix a typo or add/replace its photo later themselves — an admin
     can still edit or delete ANY post from "Admin -> Build Logs" too, in
     case something needs correcting or removing; deleting a post removes
-    its photo too, if it had one.
+    its photo too, if it had one. Editing always happens right there on the
+    Build Logs tab — there's no other page a post can be edited from.
+  - On the Build Logs tab, a post's droid name is now a link to that
+    droid's own page on "Our Droids" whenever the poster has exactly one
+    Our Droids entry of that same droid type — click "MSE-6" on someone's
+    update and it takes you straight to their MSE-6's own build log/photo
+    page. If they haven't added that droid to Our Droids yet, or they own
+    more than one of the same type (so it's not clear which one the post
+    means), the name is shown as plain text instead of guessing.
   - From "Admin -> Members" there's now an "Edit" button per member to fix
     a typo in their name, email, or droid without having to remove and
     re-add them. The same table also shows each member's "Last Login" —
@@ -253,6 +275,28 @@ itself — no dashboard steps needed:
     remove a photo that shouldn't be there; members can edit their own
     entries but can't remove anyone else's, and can't edit anyone else's
     either — only an admin can remove.
+  - An "Assets" tab tracks the club's own props, backdrops, and other kit —
+    a shared inventory rather than a members' personal droid showcase. Any
+    member can log an item (a name, one or more photos — up to 4 per
+    upload, JPEG, PNG, or WEBP, auto-shrunk if oversized, same as
+    everywhere else — an optional category of Prop/Backdrop/Other, an
+    optional location note like "Jason's garage" so a physical item can
+    actually be tracked down, an optional condition of Good/Needs
+    Repair/Missing shown as a colored badge, and an optional free-text
+    description). At least one photo is required specifically so everyone
+    can tell at a glance what an item actually is, not just read its name;
+    an item with several photos (different angles, a close-up of some
+    damage) shows its first as the main card image with the rest in a
+    small strip underneath. Each entry shows an "Edit" link to whoever
+    added it, so they can update any of its fields, add more photos
+    alongside the existing ones, or remove an individual photo they no
+    longer want (an asset always needs to keep at least one — the last
+    photo on an item can't be removed, only replaced by adding a new one
+    first). From "Admin -> Assets" any admin can remove an entry — and
+    every photo attached to it — that shouldn't be listed, but — unlike
+    Files — adding and editing stays with members, not admins, same
+    division of labour as Our Droids. This tab, and every asset photo, is
+    members-only — there's no public asset page.
   - A "Files" tab gives every member somewhere to download logos,
     committee templates, and other documents — grouped into categories
     (starts seeded with "Logos", "Templates", "Documents", editable from
@@ -333,6 +377,81 @@ itself — no dashboard steps needed:
     yet") so it's obvious at a glance where you stand on any event. A
     "Clear response" link appears once you've picked one, in case you'd
     rather go back to no response at all.
+  - The members Events tab now shows events in date order instead of
+    whatever order they happened to be added in, and upcoming events
+    always come first — soonest at the very top. Anything already in the
+    past (events get kept around mainly so photos logged against them stay
+    reachable) is tucked into a closed-by-default "Past Events" section
+    underneath the upcoming ones, most recent past event first, so it
+    doesn't crowd out what's coming up.
+  - There's also a small calendar above the event list showing one month
+    at a time, with any date that has an event filled in with the site's
+    green accent colour so it's immediately obvious (a multi-day event
+    fills in every day it covers). Click a marked date and the event(s) on
+    it are listed right below the calendar as links — click a link and the
+    page jumps straight down to that event's full card. The calendar opens
+    on the soonest upcoming event's month automatically; use the arrows
+    either side of the month name to look at other months.
+  - The members Directory tab now shows each member's actual build(s) from
+    their "Our Droids" entries (with a link straight to each droid's own
+    build log/photo page), instead of the old single hand-typed "droid"
+    field on their account, which most members never had set — that's why
+    everyone used to show "No build listed yet" even after adding droids
+    of their own. A member with no "Our Droids" entries but an old-style
+    droid field still set (from before this feature, or set by an admin)
+    still shows that as plain text; "No build listed yet" now only shows
+    when neither exists.
+  - Every member is now emailed whenever an event is added or edited from
+    Admin -> Events, or a member-submitted event is approved (a plain
+    notice, no RSVP required) — see section 3B below for the one-time
+    setup this needs. Until that's done, the site works exactly as
+    before; the admin notice after adding/editing an event will just say
+    the notification email wasn't sent rather than silently doing nothing.
+
+
+3B. SET UP EVENT EMAIL NOTIFICATIONS (optional, one-time step)
+-----------------------------------------------------------------
+Cloudflare Workers can't send email on their own, so this goes through a
+free service called Resend (resend.com) — a well-known email-sending API
+used by lots of small sites for exactly this kind of notification. Skip
+this section entirely if you don't want members emailed about events; the
+rest of the site works fully without it.
+
+  a) Create a free account at https://resend.com (their free tier covers
+     3,000 emails/month, which is far more than a club this size needs).
+
+  b) In Resend, go to "Domains" -> "Add Domain" and enter
+     norwichdroids.co.uk. It'll show you 2-3 DNS records (usually a TXT
+     and one or two CNAME/MX records) to add. Add those at wherever your
+     domain's DNS is managed — if you followed section 4 below and moved
+     your domain to Cloudflare, that's Cloudflare -> your domain -> DNS ->
+     Records -> Add record, matching the type/name/value Resend shows
+     you. Verification can take anywhere from a few minutes to a few
+     hours after the records are added.
+
+  c) Once the domain shows "Verified" in Resend, go to "API Keys" ->
+     "Create API Key". Give it a name like "Norwich Droids site" and copy
+     the key it shows you (you only get to see it once).
+
+  d) Add that key to your Cloudflare Worker as a secret called
+     RESEND_API_KEY — NOT in wrangler.jsonc (secrets never go in that
+     file, since it's the kind of thing that ends up in GitHub). Two ways
+     to do this, pick whichever matches how you deployed:
+
+       - From the Cloudflare dashboard: Workers & Pages -> norwich-droids
+         -> Settings -> Variables and Secrets -> Add -> type "Secret",
+         name it RESEND_API_KEY, paste in the key, and Save/Deploy.
+
+       - From the command line (if you deployed with wrangler): run
+         `wrangler secret put RESEND_API_KEY` from the cf-build folder
+         and paste the key in when prompted.
+
+  That's it — no code change or redeploy needed once the secret is set.
+  The next time an admin adds or edits an event (or approves a submitted
+  one), every member with an email on file gets notified automatically,
+  sent from "events@norwichdroids.co.uk". The admin's usual "was added" /
+  "was updated" confirmation on that page will also say how many members
+  were emailed, so you can tell at a glance that it's working.
 
 
 4. POINT norwichdroids.co.uk AT THIS SITE
@@ -386,6 +505,12 @@ normal for a site this size:
                                  but only title/date/location/website link,
                                  and only events that haven't happened yet
   - About page members:         public/about.html
+  - Charity page:               public/charity.html — the intro text and the
+                                 "Charities We Support" cards (name,
+                                 description, link) are both plain HTML in
+                                 this file; add/remove a <div class=
+                                 "resource-card">...</div> block to add or
+                                 remove a charity
   - Droid showcase cards:       public/index.html now loads real member
                                  droid photos live from the "Our Droids"
                                  tab/Admin (no file to edit) — the 3 old
@@ -525,7 +650,12 @@ to touch anyone else's, even if an admin later renames them. Nothing to
 manage here directly. Entries that already existed before this feature was
 added have no "ownerId" at all, so they simply have no "Edit" link for any
 member — an admin can still edit (build logs) or remove (all three) them
-as before.
+as before. For build-log posts specifically, this now self-heals: the
+moment a member views the Build Logs tab, any post with no owner whose
+author name matches their own is automatically claimed (given their
+ownerId), so their own old posts from before this feature existed get an
+Edit link too — a post from someone else is never touched by this, even
+if an admin later reuses that display name for someone new.
 
 A few small pieces of the site are deliberately public with no login at
 all, because they power the public homepage, About, and Gallery pages: the
