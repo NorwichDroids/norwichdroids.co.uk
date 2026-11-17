@@ -1365,8 +1365,108 @@ function photoEditorMarkup() {
 </div>
 <script>
 (function () {
+  var allPhotoInputs = document.querySelectorAll('input[type="file"][data-photo-editor]');
+  if (allPhotoInputs.length === 0) return;
+
+  // --- Client-side photo downscaling ------------------------------------
+  // Runs on every photo input on the page right before its form submits —
+  // whether or not the crop/rotate editor below opens for it — so a large
+  // phone photo never reaches the Worker at full size. This matters a lot
+  // on Cloudflare's Free plan, where a Worker only gets about 10ms of CPU
+  // time per request: nowhere near enough to decode and resize a multi-
+  // megabyte photo server-side, which is what was causing "Error 1102:
+  // Worker exceeded resource limits" on upload. Doing the same resize in
+  // the browser instead costs nothing against that limit, since it runs
+  // on the member's own device before the request is even sent. The
+  // server-side resize (prepareUploadedPhoto/resizePhotoToFit) is left in
+  // place purely as a fallback for an older browser without these APIs,
+  // or with JavaScript disabled — ordinary uploads won't hit it anymore.
+  var TARGET_MAX_DIMENSION = ${MAX_PHOTO_DIMENSION};
+  var TARGET_MAX_BYTES = ${MAX_PHOTO_BYTES};
+
+  function extensionForType(type) {
+    if (type === 'image/png') return 'png';
+    if (type === 'image/webp') return 'webp';
+    return 'jpg';
+  }
+
+  function downscaleImage(file) {
+    return new Promise(function (resolve) {
+      if (!file || !/^image\\//.test(file.type) || file.size <= TARGET_MAX_BYTES
+          || typeof createImageBitmap !== 'function' || typeof document === 'undefined') {
+        resolve(file);
+        return;
+      }
+      createImageBitmap(file).then(function (bitmap) {
+        var scale = Math.min(1, TARGET_MAX_DIMENSION / Math.max(bitmap.width, bitmap.height));
+        var targetW = Math.max(1, Math.round(bitmap.width * scale));
+        var targetH = Math.max(1, Math.round(bitmap.height * scale));
+        var canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        var ctx = canvas.getContext('2d');
+        ctx.drawImage(bitmap, 0, 0, targetW, targetH);
+        if (bitmap.close) bitmap.close();
+
+        // Same quality step-down as the server-side fallback: try a decent
+        // quality first, and only back off if the result is still too big.
+        (function tryQuality(quality, attemptsLeft) {
+          canvas.toBlob(function (blob) {
+            if (!blob) { resolve(file); return; }
+            if (blob.size > TARGET_MAX_BYTES && attemptsLeft > 0) {
+              tryQuality(quality - 0.15, attemptsLeft - 1);
+              return;
+            }
+            var baseName = (file.name || 'photo').replace(/\\.[^.]+$/, '');
+            resolve(new File([blob], baseName + '.' + extensionForType(blob.type), { type: blob.type || 'image/jpeg' }));
+          }, 'image/jpeg', quality);
+        })(0.85, 4);
+      }).catch(function () { resolve(file); });
+    });
+  }
+
+  // One listener per form (several inputs can share a form, e.g. Assets'
+  // "Add More Photos" field) — intercepts the real submit just long enough
+  // to downscale every selected photo, then lets it through for real.
+  // Uses form.submit() rather than form.requestSubmit() to actually send
+  // it — requestSubmit() re-runs the browser's native submit machinery
+  // (including re-firing this same 'submit' event, which the __photosResized
+  // flag below guards against), but that re-entrant path silently failed to
+  // navigate in testing; the form was already validated once, at the
+  // original click that got us here, and swapping a file input's contents
+  // doesn't change its validity, so skipping re-validation here is safe.
+  Array.prototype.forEach.call(allPhotoInputs, function (input) {
+    var form = input.form;
+    if (!form || form.__photoResizeWired) return;
+    form.__photoResizeWired = true;
+    form.addEventListener('submit', function (evt) {
+      if (form.__photosResized) return; // belt-and-braces — form.submit() below doesn't actually re-fire this event
+      var fileInputs = Array.prototype.filter.call(
+        form.querySelectorAll('input[type="file"][data-photo-editor]'),
+        function (inp) { return inp.files && inp.files.length; }
+      );
+      if (fileInputs.length === 0) return;
+      evt.preventDefault();
+      var submitBtn = form.querySelector('button[type="submit"]');
+      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Preparing photo' + (fileInputs.some(function (inp) { return inp.files.length > 1; }) ? 's' : '') + '\\u2026'; }
+      Promise.all(fileInputs.map(function (inp) {
+        return Promise.all(Array.prototype.map.call(inp.files, downscaleImage)).then(function (files) {
+          var dt = new DataTransfer();
+          files.forEach(function (f) { dt.items.add(f); });
+          inp.files = dt.files;
+        });
+      })).catch(function () { /* best-effort — submit with whatever we have rather than get stuck */ })
+        .then(function () {
+          form.__photosResized = true;
+          form.submit();
+        });
+    });
+  });
+
+  // --- Crop & rotate editor ----------------------------------------------
   // No Cropper on window means the CDN script didn't load — every photo
-  // input just behaves as a plain <input type="file"> with no editor step.
+  // input just behaves as a plain <input type="file"> with no editor step
+  // (the downscaling above still applies either way).
   if (!window.Cropper) return;
   var overlay = document.getElementById('photoEditorOverlay');
   var img = document.getElementById('photoEditorImage');
@@ -1374,7 +1474,7 @@ function photoEditorMarkup() {
   var rotateRightBtn = document.getElementById('photoEditorRotateRight');
   var cancelBtn = document.getElementById('photoEditorCancel');
   var applyBtn = document.getElementById('photoEditorApply');
-  var inputs = document.querySelectorAll('input[type="file"][data-photo-editor]');
+  var inputs = allPhotoInputs;
   if (!overlay || !img || inputs.length === 0) return;
 
   var cropper = null;
